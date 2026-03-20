@@ -1,0 +1,60 @@
+# ------------------------------
+# Project data / generated output
+# ------------------------------
+/20260305_1727/
+/visualization_output/
+
+# ------------------------------
+# Python bytecode / caches
+# ------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Type checker / test / tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.pyre/
+.hypothesis/
+.nox/
+.tox/
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+
+# Build / packaging artifacts
+build/
+dist/
+site/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+*.egg
+
+# Jupyter / notebook checkpoints
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment / local config
+.env
+.env.*
+*.local
+
+# IDE / editor
+.vscode/
+.idea/
+.cursor/
+*.code-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
