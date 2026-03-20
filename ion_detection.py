@@ -41,10 +41,45 @@ def _build_matched_kernel(sigma_x=1.2, sigma_y=1.8, half_size=3):
     return kernel
 
 
+def _eval_amp_y_model(y_rel: np.ndarray, coef: np.ndarray, mode: str = "even") -> np.ndarray:
+    """Evaluate amplitude-vs-y model.
+
+    mode='even': coef=[a0,a2,a4], amp(y)=a0+a2*y^2+a4*y^4
+    mode='poly2': coef=[p2,p1,p0], amp(y)=p2*y^2+p1*y+p0
+    """
+    c = np.asarray(coef, dtype=np.float64).ravel()
+    if c.size != 3:
+        raise ValueError(f"Amplitude coefficient must contain 3 values, got shape {c.shape}.")
+
+    y = np.asarray(y_rel, dtype=np.float64)
+    if mode == "even":
+        return c[0] + c[1] * y**2 + c[2] * y**4
+    if mode == "poly2":
+        return np.polyval(c, y)
+    raise ValueError(f"Unsupported amp_y_coef_mode: {mode}")
+
+
+def _build_row_threshold_scale(
+    h: int,
+    cy_ref: float,
+    coef: np.ndarray,
+    mode: str = "even",
+    floor: float = 0.2,
+) -> np.ndarray:
+    """Build row-wise threshold scale in [floor, +inf)."""
+    y_rel = np.arange(h, dtype=np.float64) - float(cy_ref)
+    amp_env = _eval_amp_y_model(y_rel, coef, mode=mode)
+    amp_env = np.clip(amp_env, 1e-6, None)
+    scale = amp_env / float(np.max(amp_env))
+    return np.clip(scale, max(float(floor), 1e-6), None)
+
+
 def detect_ions(image, bg_sigma=(10, 30), peak_size=(5, 9),
                 rel_threshold=0.025, fit_hw=(3, 4),
                 sigma_range=(0.3, 3.5), use_matched_filter=True,
-                refine=True):
+                refine=True, use_y_threshold_comp=False,
+                amp_y_coef=None, amp_y_coef_path=None,
+                amp_y_coef_mode="even", comp_floor=0.2):
     """
     检测离子并拟合椭圆参数。
 
@@ -88,14 +123,38 @@ def detect_ions(image, bg_sigma=(10, 30), peak_size=(5, 9),
     else:
         detect_map = signal
 
+    # 先估计晶格边界(后续也用于可选的 y 向阈值补偿)
+    boundary = _estimate_crystal_boundary(signal)
+
     # 各向异性局部极大值检测
     local_max = maximum_filter(detect_map, size=peak_size)
     thresh = rel_threshold * detect_map.max()
-    peak_mask = (detect_map == local_max) & (detect_map > thresh)
+
+    if use_y_threshold_comp:
+        coef = amp_y_coef
+        if coef is None:
+            if amp_y_coef_path is None:
+                raise ValueError(
+                    "use_y_threshold_comp=True requires amp_y_coef or amp_y_coef_path."
+                )
+            coef = np.load(amp_y_coef_path)
+
+        cy_ref = boundary[1] if boundary is not None else (h - 1) / 2.0
+        row_scale = _build_row_threshold_scale(
+            h,
+            cy_ref=cy_ref,
+            coef=coef,
+            mode=amp_y_coef_mode,
+            floor=comp_floor,
+        )
+        thresh_map = thresh * row_scale[:, np.newaxis]
+        peak_mask = (detect_map == local_max) & (detect_map > thresh_map)
+    else:
+        peak_mask = (detect_map == local_max) & (detect_map > thresh)
+
     peak_yx = np.argwhere(peak_mask)
 
     # 在拟合前用晶格边界椭圆过滤噪声候选, 节省拟合时间
-    boundary = _estimate_crystal_boundary(signal)
     if boundary is not None:
         peak_yx = _apply_boundary_filter(peak_yx, *boundary)
 
@@ -470,6 +529,33 @@ if __name__ == "__main__":
         default=None,
         help="离子中心保存目录，默认是项目根目录下的 IonPos。",
     )
+    parser.add_argument(
+        "--use-y-thresh-comp",
+        action="store_true",
+        help="启用 y 方向亮度模型补偿阈值(降低边缘较暗区域的判定门槛)。",
+    )
+    parser.add_argument(
+        "--amp-coef-path",
+        type=Path,
+        default=None,
+        help=(
+            "y 方向亮度拟合系数文件(.npy)。"
+            "默认使用 visualization_output/amp_vs_y_coef_10.npy。"
+        ),
+    )
+    parser.add_argument(
+        "--amp-coef-mode",
+        type=str,
+        choices=("even", "poly2"),
+        default="even",
+        help="系数解释方式: even=[a0,a2,a4], poly2=[p2,p1,p0]。",
+    )
+    parser.add_argument(
+        "--comp-floor",
+        type=float,
+        default=0.2,
+        help="阈值缩放下限，越小边缘越容易被检出(也更易引入噪声)。",
+    )
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parent
@@ -477,6 +563,8 @@ if __name__ == "__main__":
     out_dir  = project_root / "visualization_output"
     out_dir.mkdir(exist_ok=True)
     pos_dir = args.pos_dir or (project_root / "IonPos")
+    default_amp_coef_path = project_root / "visualization_output" / "amp_vs_y_coef_10.npy"
+    amp_coef_path = args.amp_coef_path or default_amp_coef_path
     if args.save_pos:
         pos_dir.mkdir(exist_ok=True)
 
@@ -493,7 +581,13 @@ if __name__ == "__main__":
 
         print("正在检测离子...")
         t0 = time.perf_counter()
-        ions, boundary = detect_ions(image)
+        ions, boundary = detect_ions(
+            image,
+            use_y_threshold_comp=args.use_y_thresh_comp,
+            amp_y_coef_path=amp_coef_path,
+            amp_y_coef_mode=args.amp_coef_mode,
+            comp_floor=args.comp_floor,
+        )
         elapsed = time.perf_counter() - t0
         print(f"检测耗时: {elapsed:.2f} 秒")
         if boundary:
