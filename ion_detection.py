@@ -390,29 +390,103 @@ def print_summary(ions):
     print(f"  中心范围:  x ∈ [{xs.min():.1f}, {xs.max():.1f}],  "
           f"y ∈ [{ys.min():.1f}, {ys.max():.1f}]")
 
+
+def _parse_slice_token(token):
+    token = token.strip()
+    if not token:
+        raise ValueError("Empty index token.")
+
+    if ":" not in token:
+        return int(token)
+
+    parts = token.split(":")
+    if len(parts) > 3:
+        raise ValueError(f"Invalid slice token: {token}")
+
+    def _to_int_or_none(s):
+        s = s.strip()
+        return None if s == "" else int(s)
+
+    start = _to_int_or_none(parts[0]) if len(parts) >= 1 else None
+    stop = _to_int_or_none(parts[1]) if len(parts) >= 2 else None
+    step = _to_int_or_none(parts[2]) if len(parts) >= 3 else None
+
+    if step == 0:
+        raise ValueError(f"Slice step cannot be 0: {token}")
+    return slice(start, stop, step)
+
+
+def _resolve_indices(spec_args, total):
+    """解析索引规范，支持并集，如 ['::3,0:10', '25', '-1']。"""
+    if not spec_args:
+        spec_args = ["0"]
+
+    selected = set()
+    all_indices = np.arange(total)
+
+    for raw in spec_args:
+        for token in raw.split(","):
+            token = token.strip()
+            if not token:
+                continue
+
+            obj = _parse_slice_token(token)
+            if isinstance(obj, slice):
+                selected.update(all_indices[obj].tolist())
+            else:
+                idx = obj
+                if idx < 0:
+                    idx += total
+                if 0 <= idx < total:
+                    selected.add(idx)
+                else:
+                    print(f"[skip] index {obj} out of range [0, {total - 1}]")
+
+    return sorted(selected)
+
 # ──────────────────────────── Main ─────────────────────────────────────────
 
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="离子检测与椭圆拟合可视化")
-    parser.add_argument("indices", nargs="*", type=int, default=[0],
-                        help="要处理的 npy 文件索引 (0-based)，可指定多个，默认 0")
+    parser.add_argument(
+        "indices",
+        nargs="*",
+        default=["0"],
+        help=(
+            "要处理的索引规范，支持整数和 numpy 风格切片，并支持并集。"
+            "例如: 0 5 -1 ::3,0:10"
+        ),
+    )
+    parser.add_argument(
+        "--save-pos",
+        action="store_true",
+        help="保存离子中心坐标到 .npy 文件。",
+    )
+    parser.add_argument(
+        "--pos-dir",
+        type=Path,
+        default=None,
+        help="离子中心保存目录，默认是项目根目录下的 IonPos。",
+    )
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parent
     data_dir = project_root / "20260305_1727"
     out_dir  = project_root / "visualization_output"
     out_dir.mkdir(exist_ok=True)
+    pos_dir = args.pos_dir or (project_root / "IonPos")
+    if args.save_pos:
+        pos_dir.mkdir(exist_ok=True)
 
     files = sorted(f for f in data_dir.iterdir() if f.suffix == ".npy")
     print(f"共找到 {len(files)} 个 npy 文件")
+    selected_indices = _resolve_indices(args.indices, len(files))
+    if not selected_indices:
+        raise ValueError("没有可处理的索引。请检查输入的 indices。")
 
-    for idx in args.indices:
-        if idx < 0 or idx >= len(files):
-            print(f"[跳过] 索引 {idx} 超出范围 [0, {len(files) - 1}]")
-            continue
-
+    for idx in selected_indices:
         target = files[idx]
         print(f"\n[{idx:04d}] 加载: {target.name}")
         image = np.load(target)
@@ -428,6 +502,14 @@ if __name__ == "__main__":
                   f"半轴=({a:.1f}, {b:.1f})")
 
         print_summary(ions)
+
+        if args.save_pos:
+            positions = np.array([[ion["x0"], ion["y0"]] for ion in ions], dtype=np.float64)
+            if positions.size == 0:
+                positions = np.empty((0, 2), dtype=np.float64)
+            pos_path = pos_dir / target.name
+            np.save(pos_path, positions)
+            print(f"[已保存离子中心] {pos_path}")
 
         out_path = out_dir / f"ion_ellipses_{idx:04d}.png"
         visualize(image, ions, n_sigma=2.0,
