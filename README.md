@@ -78,23 +78,54 @@ python .\ion_detection.py 0 ^
   - `poly2`：`[p2,p1,p0]`，模型 `p2*y^2 + p1*y + p0`
 - `--comp-floor`：行阈值缩放下限（默认 0.2）
 
+### 3.4 固定椭圆转角 θ=0（轴对齐高斯拟合）
+
+```bash
+python .\ion_detection.py 0 --fix-theta-zero
+```
+
+高斯拟合时不优化旋转角，假定 PSF 主轴与图像 `x/y` 对齐。可视化标题中椭圆半轴以 `sigma` 标注。
+
+### 3.5 y 向近邻双峰联合拟合（N=2，θ=0）
+
+对**已通过局部极大值与阈值得到的候选峰**，若在竖直方向两两足够接近，则在合并 ROI 内同时拟合两个轴对齐高斯；失败则退回两次单峰拟合。**不改变**峰检测步骤，不能找回从未成为候选的离子。
+
+```bash
+python .\ion_detection.py 0 --joint-pair-y-gap 12
+# 可选：限制水平配对范围（省略时默认 max(4, 拟合半宽 hw_x)）
+python .\ion_detection.py 0 --joint-pair-y-gap 12 --joint-pair-x-gap 6
+```
+
+- `--joint-pair-y-gap DY`：两候选峰满足 `|Δy| ≤ DY` 且 `|Δx|` 在 x 间隙内时可结成一对做联合拟合。
+- `--joint-pair-x-gap DX`：联合配对允许的 `|Δx|`（像素）。
+
 ---
 
 ## `gallery.py`
 
-交互式浏览 `npy` 图像并叠加检测结果。
+交互式浏览 `npy` 图像并叠加检测结果；界面文案为英文。
 
 ```bash
 python .\gallery.py
 ```
 
-功能：
+### 布局与显示
+
+- **顶部**：与 `ion_detection.py` / `detect_ions` 对齐的检测选项——复选框（`theta=0`、`Y thresh comp`、`Matched filt.`、`Two-pass ref.`）及文本框（`rel`、`c_fl`、`jY`、`jX`、`mode` 等）。修改参数并回车后缓存会清空，需再次点击 **`Detect`**。
+- **中部**：当前帧灰度图，**`aspect="equal"`**，像素在屏幕上近似为正方形。
+- **底部**：帧索引滑条、`Go` 文本框、`Detect` / `Prev` / `Next`，以及状态栏。
+
+启用 **Y thresh comp** 时，默认使用 `{项目根}/visualization_output/amp_vs_y_coef_10.npy`（与 CLI 默认一致）；若文件不存在会报错。
+
+检测结果按 **`(帧索引, 参数签名)`** 缓存，便于在同参数下切换帧时复用叠加。
+
+### 操作
 
 - 滑条切换帧
-- 文本框输入索引后回车跳转
+- `Go` 文本框输入索引后回车跳转
 - `Prev` / `Next` 按钮翻页
-- 键盘翻页：`Left/Right`、`Up/Down`、`PageUp/PageDown`、`Home/End`
-- `Detect` 按钮对当前页执行检测并叠加结果
+- 键盘：`Left/Right`、`Up/Down`、`PageUp/PageDown`、`Home/End`、`n` / `p`
+- **`Detect`**：用当前面板参数对当前帧调用 `detect_ions` 并绘制椭圆与晶格边界
 
 ---
 
@@ -176,7 +207,9 @@ python .\dist.py --count 100 --bins 80 --output .\histogram\cdist_hist_100.png
 ## 5. 调参建议
 
 - 漏检边缘离子：尝试开启 `--use-y-thresh-comp`，并降低 `--comp-floor`（如 `0.15`）。
-- 噪点过多：提高 `--comp-floor` 或减小补偿强度；必要时提高 `rel_threshold`（需改脚本调用参数）。
+- 噪点过多：提高 `--comp-floor` 或减小补偿强度；必要时提高 `rel_threshold`（CLI / `gallery` 中 `rel` 文本框，或代码中 `detect_ions(..., rel_threshold=...)`）。
+- **y 向靠得很近、单峰拟合不稳**：可尝试 `--joint-pair-y-gap`（略小于典型竖直间距）；`DY` 过大易误配对。
+- **固定 θ 拟合**：离子拉长方向与坐标轴一致时可试 `--fix-theta-zero`；一般旋转 PSF 仍用默认旋转高斯。
 - 形变分析时：优先保证样本数量（`-n` 更大），并对比 `quadratic / quartic / gaussian` 的拟合稳定性与 `R^2`。
 
 ---
