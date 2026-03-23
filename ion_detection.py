@@ -31,6 +31,14 @@ def _gauss2d(coords, amp, x0, y0, sx, sy, theta, offset):
     yr = -st * (x - x0) + ct * (y - y0)
     return offset + amp * np.exp(-0.5 * (xr**2 / sx**2 + yr**2 / sy**2))
 
+
+def _gauss2d_aligned(coords, amp, x0, y0, sx, sy, offset):
+    """轴对齐二维高斯 (椭圆转角 θ=0, 半轴分别沿 x、y)。"""
+    x, y = coords
+    return offset + amp * np.exp(
+        -0.5 * ((x - x0) ** 2 / sx**2 + (y - y0) ** 2 / sy**2)
+    )
+
 # ──────────────────────────── Core Detection ───────────────────────────────
 
 def _build_matched_kernel(sigma_x=1.2, sigma_y=1.8, half_size=3):
@@ -77,7 +85,8 @@ def _build_row_threshold_scale(
 def detect_ions(image, bg_sigma=(10, 30), peak_size=(5, 9),
                 rel_threshold=0.025, fit_hw=(3, 4),
                 sigma_range=(0.3, 3.5), use_matched_filter=True,
-                refine=True, use_y_threshold_comp=False,
+                refine=True, fix_theta_zero=False,
+                use_y_threshold_comp=False,
                 amp_y_coef=None, amp_y_coef_path=None,
                 amp_y_coef_mode="even", comp_floor=0.2):
     """
@@ -93,6 +102,7 @@ def detect_ions(image, bg_sigma=(10, 30), peak_size=(5, 9),
     sigma_range : tuple – 允许的 sigma 范围 (min, max)
     use_matched_filter : bool – 是否用匹配滤波器增强峰检测
     refine : bool – 是否启用两阶段精修 (计数模式开启; 形变测量可关闭)
+    fix_theta_zero : bool – 若为 True, 高斯拟合固定转角 θ=0 (轴对齐 x/y, 不拟合旋转)
 
     Returns
     -------
@@ -159,7 +169,7 @@ def detect_ions(image, bg_sigma=(10, 30), peak_size=(5, 9),
         peak_yx = _apply_boundary_filter(peak_yx, *boundary)
 
     ions = _fit_all_peaks(img, signal, peak_yx, hw_y, hw_x, s_lo, s_hi,
-                          h, w, refine=refine)
+                          h, w, refine=refine, fix_theta_zero=fix_theta_zero)
     ions.sort(key=lambda d: (d["y0"], d["x0"]))
     return ions, boundary
 
@@ -202,7 +212,7 @@ def _apply_boundary_filter(peak_yx, cx, cy, a, b):
 
 
 def _fit_all_peaks(img, signal, peak_yx, hw_y, hw_x, s_lo, s_hi,
-                   h, w, refine=True):
+                   h, w, refine=True, fix_theta_zero=False):
     """对所有候选峰做高斯拟合, 可选两阶段精修。"""
     # 权重模板: y 方向更锐利 (0.45), 抑制紧邻离子
     wy, wx = 2 * hw_y + 1, 2 * hw_x + 1
@@ -212,7 +222,8 @@ def _fit_all_peaks(img, signal, peak_yx, hw_y, hw_x, s_lo, s_hi,
                                    + (gy_t - cy_t)**2 / (hw_y * 0.45)**2))
 
     ions = _do_fit_pass(img, peak_yx, hw_y, hw_x, s_lo, s_hi,
-                        h, w, weight_template, sigma_init=(1.2, 1.8))
+                        h, w, weight_template, sigma_init=(1.2, 1.8),
+                        fix_theta_zero=fix_theta_zero)
 
     if not refine or len(ions) < 20:
         return ions
@@ -243,7 +254,8 @@ def _fit_all_peaks(img, signal, peak_yx, hw_y, hw_x, s_lo, s_hi,
     refitted = _do_fit_pass(img, refit_yx, hw_y, hw_x, s_lo,
                             max(tight_s_hi_minor, tight_s_hi_major),
                             h, w, weight_template,
-                            sigma_init=(ref_minor, ref_major))
+                            sigma_init=(ref_minor, ref_major),
+                            fix_theta_zero=fix_theta_zero)
 
     # 用重拟合结果替换
     refit_map = {}
@@ -266,7 +278,8 @@ def _fit_all_peaks(img, signal, peak_yx, hw_y, hw_x, s_lo, s_hi,
 
 
 def _do_fit_pass(img, peak_yx, hw_y, hw_x, s_lo, s_hi,
-                 h, w, weight_template, sigma_init=(1.2, 1.8)):
+                 h, w, weight_template, sigma_init=(1.2, 1.8),
+                 fix_theta_zero=False):
     """单次高斯拟合遍历。"""
     ions = []
     si_x, si_y = sigma_init
@@ -290,37 +303,59 @@ def _do_fit_pass(img, peak_yx, hw_y, hw_x, s_lo, s_hi,
         fit_sigma = 1.0 / np.sqrt(np.clip(weights, 0.01, None))
 
         try:
-            p0 = [amp0, lx, ly, si_x, si_y, 0.0, float(patch.min())]
-            lo = [0,       0,       0,       s_lo, s_lo, -np.pi, 0]
-            hi = [amp0*4,  pw_ - 1, ph - 1,  s_hi, s_hi,  np.pi, float(patch.max())]
+            off0 = float(patch.min())
+            if fix_theta_zero:
+                p0 = [amp0, lx, ly, si_x, si_y, off0]
+                lo = [0, 0, 0, s_lo, s_lo, 0]
+                hi = [amp0 * 4, pw_ - 1, ph - 1, s_hi, s_hi, float(patch.max())]
+                popt, _ = curve_fit(
+                    _gauss2d_aligned, (xx.ravel(), yy.ravel()), patch.ravel(),
+                    p0=p0, bounds=(lo, hi), maxfev=2000,
+                    sigma=fit_sigma.ravel(),
+                )
+                amp, fx, fy, sx, sy, offset = popt
+                if sx > sy:
+                    sigma_minor, sigma_major = sy, sx
+                else:
+                    sigma_minor, sigma_major = sx, sy
+                theta_deg = 0.0
+            else:
+                p0 = [amp0, lx, ly, si_x, si_y, 0.0, off0]
+                lo = [0, 0, 0, s_lo, s_lo, -np.pi, 0]
+                hi = [amp0 * 4, pw_ - 1, ph - 1, s_hi, s_hi, np.pi, float(patch.max())]
+                popt, _ = curve_fit(
+                    _gauss2d, (xx.ravel(), yy.ravel()), patch.ravel(),
+                    p0=p0, bounds=(lo, hi), maxfev=2000,
+                    sigma=fit_sigma.ravel(),
+                )
+                amp, fx, fy, sx, sy, theta, offset = popt
 
-            popt, _ = curve_fit(
-                _gauss2d, (xx.ravel(), yy.ravel()), patch.ravel(),
-                p0=p0, bounds=(lo, hi), maxfev=2000,
-                sigma=fit_sigma.ravel(),
-            )
+                if sx > sy:
+                    sx, sy = sy, sx
+                    theta += np.pi / 2
+
+                theta_deg = np.degrees(theta)
+                theta_deg = ((theta_deg + 90) % 180) - 90
+
+                sigma_minor, sigma_major = sx, sy
+
         except (RuntimeError, ValueError):
             continue
-
-        amp, fx, fy, sx, sy, theta, offset = popt
-
-        if sx > sy:
-            sx, sy = sy, sx
-            theta += np.pi / 2
-
-        theta_deg = np.degrees(theta)
-        theta_deg = ((theta_deg + 90) % 180) - 90
 
         gx, gy = x1 + fx, y1 + fy
 
         if abs(gx - px) > hw_x or abs(gy - py) > hw_y:
             continue
-        if not (s_lo <= sx <= s_hi and s_lo <= sy <= s_hi):
-            continue
+        if fix_theta_zero:
+            if not (s_lo <= sx <= s_hi and s_lo <= sy <= s_hi):
+                continue
+        else:
+            if not (s_lo <= sigma_minor <= s_hi and s_lo <= sigma_major <= s_hi):
+                continue
 
         ions.append({
             "x0": gx, "y0": gy,
-            "sigma_minor": sx, "sigma_major": sy,
+            "sigma_minor": sigma_minor, "sigma_major": sigma_major,
             "theta_deg": theta_deg,
             "amplitude": amp,
             "_py": py, "_px": px,
@@ -556,6 +591,11 @@ if __name__ == "__main__":
         default=0.2,
         help="阈值缩放下限，越小边缘越容易被检出(也更易引入噪声)。",
     )
+    parser.add_argument(
+        "--fix-theta-zero",
+        action="store_true",
+        help="高斯拟合固定椭圆转角 θ=0 (轴对齐 x/y，不拟合旋转)。",
+    )
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parent
@@ -587,6 +627,7 @@ if __name__ == "__main__":
             amp_y_coef_path=amp_coef_path,
             amp_y_coef_mode=args.amp_coef_mode,
             comp_floor=args.comp_floor,
+            fix_theta_zero=args.fix_theta_zero,
         )
         elapsed = time.perf_counter() - t0
         print(f"检测耗时: {elapsed:.2f} 秒")
