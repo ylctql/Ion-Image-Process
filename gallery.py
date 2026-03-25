@@ -7,6 +7,7 @@ from matplotlib.patches import Ellipse
 from matplotlib.widgets import Slider, TextBox, Button, CheckButtons
 
 from ion_detection import detect_ions
+from output_paths import OUT_AMP_Y_FIT, PROJECT_ROOT
 
 
 class NpyGalleryApp:
@@ -22,9 +23,7 @@ class NpyGalleryApp:
         self.detect_cache = {}
         self._updating_controls = False
 
-        self._default_amp_coef = (
-            self._project_root / "visualization_output" / "amp_vs_y_coef_10.npy"
-        )
+        self._default_amp_coef = OUT_AMP_Y_FIT / "amp_vs_y_coef_10.npy"
 
         # Wide figure: detection params on top bar, image full width in the middle.
         self.fig = plt.figure(figsize=(16, 9))

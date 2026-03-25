@@ -1,8 +1,14 @@
 """
-统计并可视化 20260305_1727 目录中的 npy 矩阵数据。
+统计并可视化 20260305_1727 目录中的 npy 矩阵数据（脚本入口: ``project_info.py``）。
 
-目录包含 997 个 (171, 1024) float32 矩阵，
+目录包含大量 (171, 1024) float32 矩阵，
 文件名格式: YYYYMMDD_HHMMSS.npy（表示采集时间戳）。
+
+图表默认写入 ``outputs/dataset_viz/``（见 ``output_paths.OUT_DATASET_VIZ``）。
+
+运行::
+
+    python project_info.py
 """
 
 import os
@@ -12,10 +18,11 @@ from matplotlib.colors import Normalize
 from datetime import datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+from output_paths import OUT_DATASET_VIZ, PROJECT_ROOT
+
 DATA_DIR = PROJECT_ROOT / "20260305_1727"
-OUTPUT_DIR = PROJECT_ROOT / "visualization_output"
-OUTPUT_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR = OUT_DATASET_VIZ
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def parse_timestamp(filename: str) -> datetime:

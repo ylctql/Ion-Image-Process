@@ -2,13 +2,13 @@
 将 20260305_1727（或任意目录）中指定的 .npy 矩阵可视化并保存为 PNG。
 
 用法示例:
-  python visualize_selected_npy.py 20260305_005542 20260305_010000
-  python visualize_selected_npy.py --dir 20260305_1727 --out visualization_output 20260305_005542
-  python visualize_selected_npy.py --one-figure --cmap inferno 20260305_005542 20260305_010000
+  python vis_selected_npy.py 20260305_005542 20260305_010000
+  python vis_selected_npy.py --dir 20260305_1727 --out outputs/npy_plots 20260305_005542
+  python vis_selected_npy.py --one-figure --cmap inferno 20260305_005542 20260305_010000
   # (171,1024) 数据：仅对行方向插值上采样 4 倍
-  python visualize_selected_npy.py --zoom-axes 4,1 20260305_005542
+  python vis_selected_npy.py --zoom-axes 4,1 20260305_005542
   # 仅弹出窗口显示，不写 PNG
-  python visualize_selected_npy.py --show 20260305_005542
+  python vis_selected_npy.py --show 20260305_005542
 """
 
 from __future__ import annotations
@@ -22,9 +22,10 @@ import numpy as np
 from matplotlib.colors import Normalize
 from scipy.ndimage import zoom
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+from output_paths import OUT_NPY_SELECTED, PROJECT_ROOT
+
 DEFAULT_DATA_DIR = PROJECT_ROOT / "20260305_1727"
-DEFAULT_OUT_DIR = PROJECT_ROOT / "visualization_output"
+DEFAULT_OUT_DIR = OUT_NPY_SELECTED
 
 
 def _resolve_npy_path(data_dir: Path, name: str) -> Path:

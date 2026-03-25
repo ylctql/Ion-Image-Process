@@ -18,12 +18,9 @@ import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 
 from ion_detection import detect_ions
+from output_paths import OUT_AMP_Y_FIT, OUT_STRETCH_ANALYSIS, PROJECT_ROOT
 
-
-PROJECT_ROOT = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_ROOT / "20260305_1727"
-OUTPUT_DIR = PROJECT_ROOT / "visualization_output"
-OUTPUT_DIR.mkdir(exist_ok=True)
 
 # 形变测量模式: 放宽 sigma 上限、增大拟合窗口、关闭两阶段精修,
 # 避免边缘离子的 sigma_major 被截断导致 ratio 失真。
@@ -117,10 +114,12 @@ def main(
     ratio_fit_method: str = "quadratic",
     amp_fit_method: str = "quadratic",
 ):
-    out_fig = OUTPUT_DIR / (
+    OUT_STRETCH_ANALYSIS.mkdir(parents=True, exist_ok=True)
+    OUT_AMP_Y_FIT.mkdir(parents=True, exist_ok=True)
+    out_fig = OUT_STRETCH_ANALYSIS / (
         f"stretching_analysis_{n_frames}_ratio-{ratio_fit_method}_amp-{amp_fit_method}.png"
     )
-    amp_coef_file = OUTPUT_DIR / f"amp_vs_y_coef_{n_frames}_{amp_fit_method}.npy"
+    amp_coef_file = OUT_AMP_Y_FIT / f"amp_vs_y_coef_{n_frames}_{amp_fit_method}.npy"
 
     files = sorted(DATA_DIR.glob("*.npy"))[:n_frames]
     if not files:

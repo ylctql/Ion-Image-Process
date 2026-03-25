@@ -3,6 +3,8 @@ from pathlib import Path
 import argparse
 
 import matplotlib.pyplot as plt
+
+from output_paths import OUT_HISTOGRAM, OUT_ION_POS
 import numpy as np
 from scipy.spatial.distance import cdist
 
@@ -77,8 +79,8 @@ def main():
     parser.add_argument(
         "--pos-dir",
         type=Path,
-        default=Path(__file__).resolve().parent / "IonPos",
-        help="Directory that stores ion center coordinate .npy files.",
+        default=OUT_ION_POS,
+        help="Directory that stores ion center coordinate .npy files (default: outputs/IonPos).",
     )
     parser.add_argument(
         "--count",
@@ -96,7 +98,7 @@ def main():
         "--output",
         type=Path,
         default=None,
-        help="Output path of histogram image (default: histogram/cdist_hist_{configs}.png).",
+        help="Output path of histogram image (default: outputs/histogram/cdist_hist_{configs}.png).",
     )
     parser.add_argument(
         "--show",
@@ -119,11 +121,7 @@ def main():
 
     output_path = args.output
     if output_path is None:
-        output_path = (
-            Path(__file__).resolve().parent
-            / "histogram"
-            / f"cdist_hist_{len(config_files)}.png"
-        )
+        output_path = OUT_HISTOGRAM / f"cdist_hist_{len(config_files)}.png"
 
     plot_histogram(
         distances,
