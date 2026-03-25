@@ -821,6 +821,11 @@ if __name__ == "__main__":
         help="高斯拟合固定椭圆转角 θ=0 (轴对齐 x/y，不拟合旋转)。",
     )
     parser.add_argument(
+        "--no-matched-filter",
+        action="store_true",
+        help="禁用匹配滤波; 峰检测直接使用减背景后的信号 (默认启用匹配滤波)。",
+    )
+    parser.add_argument(
         "--joint-pair-y-gap",
         type=float,
         default=None,
@@ -869,6 +874,7 @@ if __name__ == "__main__":
             amp_y_coef_mode=args.amp_coef_mode,
             comp_floor=args.comp_floor,
             fix_theta_zero=args.fix_theta_zero,
+            use_matched_filter=not args.no_matched_filter,
             joint_pair_y_gap=args.joint_pair_y_gap,
             joint_pair_x_gap=args.joint_pair_x_gap,
         )
