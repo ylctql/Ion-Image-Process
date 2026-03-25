@@ -26,7 +26,8 @@ def detect_ions(image, bg_sigma=(10, 30), peak_size=(5, 9),
                 peak_peel_margin_sigma=4.5,
                 peak_peel_y_edges_only=False, peak_peel_y_edge_frac=0.25,
                 peak_peel_rel_threshold=None,
-                peak_peel_min_amp_frac=None):
+                peak_peel_min_amp_frac=None,
+                return_peel_residual=False):
     """
     检测离子并拟合椭圆参数。
 
@@ -54,6 +55,8 @@ def detect_ions(image, bg_sigma=(10, 30), peak_size=(5, 9),
         可设为略高于首轮 (如 0.04) 以抑制残差上的小峰。
     peak_peel_min_amp_frac : float or None – 第二轮保留的离子振幅须 ≥ 该比例 × 首轮振幅中位数;
         如 0.35 可去掉很弱的剥离伪峰。
+    return_peel_residual : bool – 为 True 时额外返回首轮剥离后的残差图 ``image - Σ拟合峰`` (仅当
+        ``peak_peel`` 且首轮 ``ions`` 非空时非 None; 否则为 None)。
 
     Returns
     -------
@@ -63,8 +66,12 @@ def detect_ions(image, bg_sigma=(10, 30), peak_size=(5, 9),
         sigma_major  – 长轴 sigma (像素)
         theta_deg    – 长轴相对 x 轴的旋转角 (度)
         amplitude    – 高斯峰值强度
+
+    若 ``return_peel_residual`` 为 True, 返回 ``(ions, boundary, peel_residual)``,
+    其中 ``peel_residual`` 为 ndarray 或 None; 否则返回 ``(ions, boundary)``.
     """
     img = image.astype(np.float64)
+    peel_residual = None
     h, w = img.shape
     s_lo, s_hi = sigma_range
 
@@ -109,6 +116,8 @@ def detect_ions(image, bg_sigma=(10, 30), peak_size=(5, 9),
     if peak_peel and ions:
         peel = _accumulate_peel_model(h, w, ions, margin_sigma=peak_peel_margin_sigma)
         img_peeled = img - peel
+        if return_peel_residual:
+            peel_residual = img_peeled
         bg2 = gaussian_filter(img_peeled, sigma=bg_sigma)
         signal2 = img_peeled - bg2
         if use_matched_filter:
@@ -149,4 +158,6 @@ def detect_ions(image, bg_sigma=(10, 30), peak_size=(5, 9),
             ions2 = [d for d in ions2 if float(d["amplitude"]) >= lo]
         ions = merge_ions_by_distance(ions, ions2, peak_peel_min_sep)
 
+    if return_peel_residual:
+        return ions, boundary, peel_residual
     return ions, boundary

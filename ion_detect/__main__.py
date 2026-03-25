@@ -8,11 +8,16 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
-from output_paths import OUT_AMP_Y_FIT, OUT_ION_DETECT_IMGS, OUT_ION_POS
+from output_paths import (
+    OUT_AMP_Y_FIT,
+    OUT_ION_DETECT_IMGS,
+    OUT_ION_POS,
+    OUT_RESIDUAL_IMGS,
+)
 
 from .cli_helpers import resolve_indices
 from .pipeline import detect_ions
-from .viz import print_summary, visualize
+from .viz import print_summary, visualize, visualize_peel_residual
 
 
 def main():
@@ -131,12 +136,24 @@ def main():
         metavar="Q",
         help="第二轮峰振幅须 ≥ Q×首轮振幅中位数 (抑制弱伪峰)。",
     )
+    parser.add_argument(
+        "--save-residual-img",
+        action="store_true",
+        help="保存 peak-peel 残差图 (须配合 --peak-peel; 首轮无离子时不生成)。",
+    )
+    parser.add_argument(
+        "--residual-img-dir",
+        type=Path,
+        default=None,
+        help="残差图保存目录，默认 outputs/residual_imgs。",
+    )
     args = parser.parse_args()
 
     project_root = _PROJECT_ROOT
     data_dir = project_root / "20260305_1727"
     out_dir = OUT_ION_DETECT_IMGS
     out_dir.mkdir(parents=True, exist_ok=True)
+    residual_dir = args.residual_img_dir or OUT_RESIDUAL_IMGS
     pos_dir = args.pos_dir or OUT_ION_POS
     default_amp_coef_path = OUT_AMP_Y_FIT / "amp_vs_y_coef_10.npy"
     amp_coef_path = args.amp_coef_path or default_amp_coef_path
@@ -149,6 +166,28 @@ def main():
     if not selected_indices:
         raise ValueError("没有可处理的索引。请检查输入的 indices。")
 
+    if args.save_residual_img and not args.peak_peel:
+        print("警告: --save-residual-img 已忽略 (需同时使用 --peak-peel)。")
+    want_residual = bool(args.save_residual_img and args.peak_peel)
+
+    detect_kw = dict(
+        use_y_threshold_comp=args.use_y_thresh_comp,
+        amp_y_coef_path=amp_coef_path,
+        amp_y_coef_mode=args.amp_coef_mode,
+        comp_floor=args.comp_floor,
+        fix_theta_zero=args.fix_theta_zero,
+        use_matched_filter=not args.no_matched_filter,
+        joint_pair_y_gap=args.joint_pair_y_gap,
+        joint_pair_x_gap=args.joint_pair_x_gap,
+        peak_peel=args.peak_peel,
+        peak_peel_min_sep=args.peak_peel_min_sep,
+        peak_peel_y_edges_only=args.peak_peel_y_edges_only,
+        peak_peel_y_edge_frac=args.peak_peel_y_edge_frac,
+        peak_peel_rel_threshold=args.peak_peel_rel_threshold,
+        peak_peel_min_amp_frac=args.peak_peel_min_amp_frac,
+        peak_peel_margin_sigma=4.5,
+    )
+
     for idx in selected_indices:
         target = files[idx]
         print(f"\n[{idx:04d}] 加载: {target.name}")
@@ -156,23 +195,13 @@ def main():
 
         print("正在检测离子...")
         t0 = time.perf_counter()
-        ions, boundary = detect_ions(
-            image,
-            use_y_threshold_comp=args.use_y_thresh_comp,
-            amp_y_coef_path=amp_coef_path,
-            amp_y_coef_mode=args.amp_coef_mode,
-            comp_floor=args.comp_floor,
-            fix_theta_zero=args.fix_theta_zero,
-            use_matched_filter=not args.no_matched_filter,
-            joint_pair_y_gap=args.joint_pair_y_gap,
-            joint_pair_x_gap=args.joint_pair_x_gap,
-            peak_peel=args.peak_peel,
-            peak_peel_min_sep=args.peak_peel_min_sep,
-            peak_peel_y_edges_only=args.peak_peel_y_edges_only,
-            peak_peel_y_edge_frac=args.peak_peel_y_edge_frac,
-            peak_peel_rel_threshold=args.peak_peel_rel_threshold,
-            peak_peel_min_amp_frac=args.peak_peel_min_amp_frac,
-        )
+        if want_residual:
+            ions, boundary, peel_residual = detect_ions(
+                image, **detect_kw, return_peel_residual=True,
+            )
+        else:
+            ions, boundary = detect_ions(image, **detect_kw)
+            peel_residual = None
         elapsed = time.perf_counter() - t0
         print(f"检测耗时: {elapsed:.2f} 秒")
         if boundary:
@@ -195,6 +224,22 @@ def main():
                   title=f"[{idx:04d}] {target.name}",
                   output_path=out_path,
                   show_zoom=True, boundary=boundary)
+
+        if want_residual:
+            if peel_residual is None:
+                print("[残差图] 首轮无检出离子, 跳过保存。")
+            else:
+                residual_dir.mkdir(parents=True, exist_ok=True)
+                residual_path = residual_dir / f"peak_peel_residual_{idx:04d}.png"
+                visualize_peel_residual(
+                    peel_residual,
+                    title=f"[{idx:04d}] {target.name}",
+                    output_path=residual_path,
+                    boundary=boundary,
+                    reference_image=image,
+                    peak_peel_y_edges_only=args.peak_peel_y_edges_only,
+                    peak_peel_y_edge_frac=args.peak_peel_y_edge_frac,
+                )
 
 
 if __name__ == "__main__":

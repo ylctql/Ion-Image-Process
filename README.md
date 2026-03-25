@@ -77,6 +77,32 @@ python .\ion_detection.py
 python -m ion_detect 0 5 -1 "::3,0:10"
 ```
 
+### 3.1.1 `python -m ion_detect` 选项与默认值
+
+| 选项 | 默认值 | 说明 |
+|------|--------|------|
+| 位置参数 `indices` | `0` | 可多段并集 |
+| `--save-pos` | 关闭 | |
+| `--pos-dir` | `outputs/IonPos` | 未传时使用 |
+| `--use-y-thresh-comp` | 关闭 | |
+| `--amp-coef-path` | `outputs/amp_y_fit/amp_vs_y_coef_10.npy` | 未传时使用 |
+| `--amp-coef-mode` | `even` | 可选 `poly2` |
+| `--comp-floor` | `0.2` | |
+| `--fix-theta-zero` | 关闭 | |
+| `--no-matched-filter` | 关闭 | 默认**启用**匹配滤波 |
+| `--joint-pair-y-gap` | 未设置 | 不设则不启用联合双峰 |
+| `--joint-pair-x-gap` | 未设置 | 仅在设置 `jY` 时生效；未设则检测内为 `max(4, hw_x)`，`hw_x` 来自 `fit_hw` |
+| `--peak-peel` | 关闭 | |
+| `--peak-peel-min-sep` | `2.0` | 像素 |
+| `--peak-peel-y-edges-only` | 关闭 | |
+| `--peak-peel-y-edge-frac` | `0.25` | |
+| `--peak-peel-rel-threshold` | 未传 | 与首轮 `rel_threshold` 相同（见下表） |
+| `--peak-peel-min-amp-frac` | 未传 | 不设则二轮不按振幅比例过滤 |
+| `--save-residual-img` | 关闭 | 须同时 `--peak-peel` |
+| `--residual-img-dir` | `outputs/residual_imgs` | 未传时使用 |
+
+**未单独暴露给 CLI、但 `detect_ions` 使用的默认**（见 `ion_detect/pipeline.py`）：`rel_threshold=0.025`，`bg_sigma=(10, 30)`，`peak_size=(5, 9)`，`fit_hw=(3, 4)`（半窗口），`sigma_range=(0.3, 3.5)`，`refine=True`，峰值剥离时 `peak_peel_margin_sigma=4.5`。需在代码中调用 `detect_ions(...)` 才能改这些量。
+
 ### 3.2 保存离子中心
 
 ```bash
@@ -134,24 +160,30 @@ python -m ion_detect 0 --joint-pair-y-gap 12 --joint-pair-x-gap 6
 # 开启剥离
 python -m ion_detect 0 --peak-peel
 
+# 同时保存首轮剥离后的残差图（默认 outputs/residual_imgs/peak_peel_residual_XXXX.png）
+python -m ion_detect 0 --peak-peel --save-residual-img
+# （若存在晶格 boundary，残差 PNG 上以淡洋红填充标出 |y-cy|/b>=1-F 的 y 向边缘带，F 即 --peak-peel-y-edge-frac，与第二轮 filter 准则一致；标题会标明是否启用了 --peak-peel-y-edges-only。）
+
 # 第二轮只在晶格椭圆 y 向上下缘带内取候选（需能估计晶格 boundary）
 python -m ion_detect 0 --peak-peel --peak-peel-y-edges-only ^
   --peak-peel-rel-threshold 0.04 ^
   --peak-peel-min-amp-frac 0.35
 ```
 
-常用参数：
+常用参数（默认值亦可查 **§3.1.1**）：
 
-| 选项 | 含义 |
-|------|------|
-| `--peak-peel` | 启用第二轮剥离检测 |
-| `--peak-peel-min-sep PX` | 新峰与已有峰中心最小距离（像素），默认 `2` |
-| `--peak-peel-y-edges-only` | 第二轮仅保留 `|y-cy|/b` 较大的 y 向边缘候选 |
-| `--peak-peel-y-edge-frac F` | 边缘带：保留 `|y-cy|/b ≥ 1-F`，默认 `F=0.25` |
-| `--peak-peel-rel-threshold R` | 第二轮相对阈值（不传则用首轮） |
-| `--peak-peel-min-amp-frac Q` | 第二轮振幅须 ≥ `Q×` 首轮振幅中位数 |
+| 选项 | 含义 | 默认 |
+|------|------|------|
+| `--peak-peel` | 启用第二轮剥离检测 | 关 |
+| `--peak-peel-min-sep PX` | 新峰与已有峰中心最小距离（像素） | `2` |
+| `--peak-peel-y-edges-only` | 第二轮仅保留 `|y-cy|/b` 较大的 y 向边缘候选 | 关 |
+| `--peak-peel-y-edge-frac F` | 边缘带：保留 `|y-cy|/b ≥ 1-F` | `F=0.25` |
+| `--peak-peel-rel-threshold R` | 第二轮相对阈值 | 与首轮 `0.025` 相同 |
+| `--peak-peel-min-amp-frac Q` | 第二轮振幅须 ≥ `Q×` 首轮振幅中位数 | 不限制 |
+| `--save-residual-img` | 保存残差图 `原图 − Σ首轮拟合峰`（须与 `--peak-peel` 同用） | 关 |
+| `--residual-img-dir DIR` | 残差图目录 | `outputs/residual_imgs` |
 
-代码中等价参数为 `detect_ions(..., peak_peel=True, ...)`，见 `ion_detect.pipeline.detect_ions` 文档字符串。
+代码中等价参数为 `detect_ions(..., peak_peel=True, return_peel_residual=True, ...)` 返回 `(ions, boundary, peel_residual)`，见 `ion_detect.pipeline.detect_ions` 文档字符串。
 
 ### 3.7 包内模块分工（便于维护与二次开发）
 
@@ -176,6 +208,8 @@ python -m ion_detect 0 --peak-peel --peak-peel-y-edges-only ^
 ```bash
 python .\gallery.py
 ```
+
+**界面初始默认（与 CLI 对齐，见 §3.1.1）**：`rel=0.025`，`c_fl=0.2`，`mode=even`；复选框 `theta=0` / `Y thresh comp` 默认关，`Matched filt.` / `Two-pass ref.` 默认开；`jY` / `jX` 空表示不启用联合双峰。Y 补偿开启时用 `outputs/amp_y_fit/amp_vs_y_coef_10.npy`。
 
 ### 布局与显示
 
@@ -217,6 +251,8 @@ python .\stretching_analysis.py -n 10
 python .\stretching_analysis.py -n 100 --ratio-fit quartic --amp-fit gaussian
 ```
 
+**参数默认值**：`-n` / `--n-frames` 为 `100`；`--ratio-fit` 与 `--amp-fit` 均为 `quadratic`（可选 `quartic`、`gaussian`）。
+
 可选拟合方法：
 
 - `quadratic`
@@ -255,6 +291,8 @@ python .\dist.py --count 100
 python .\dist.py --count 100 --bins 80 --output .\outputs\histogram\cdist_hist_100.png
 ```
 
+**参数默认值**：`--pos-dir` 为 `outputs/IonPos`；`--count` 未传则用目录下**全部** `.npy`；`--bins` 为 `50`；`--output` 未传则为 `outputs/histogram/cdist_hist_{所用构型数}.png`；`--show` 默认关闭。
+
 ---
 
 ## `vis_selected_npy.py`
@@ -267,7 +305,9 @@ python .\vis_selected_npy.py --dir 20260305_1727 --out outputs\npy_plots 2026030
 python .\vis_selected_npy.py --one-figure --cmap inferno 20260305_005542
 ```
 
-更多参数（`--zoom-axes`、`--show`、`--dpi` 等）见脚本内 `argparse` 帮助：`python .\vis_selected_npy.py -h`。
+**参数默认值**：`--dir` 为项目根下 `20260305_1727`；`--out` 为 `outputs/npy_plots`；`--cmap` 为 `viridis`；`--dpi` 为 `150`；`--zoom-axes` 未传等价于 `1,1`（不上采样）；`--zoom-order` 为 `1`（线性）；`--interpolation` 为 `antialiased`；`--one-figure`、`--per-file-scale`、`--show` 默认关（多帧时默认**共用**色标以便对比）。
+
+更多参数见脚本内 `argparse` 帮助：`python .\vis_selected_npy.py -h`。
 
 ---
 

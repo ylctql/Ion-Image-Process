@@ -23,6 +23,25 @@ def merge_ions_by_distance(primary: list, extra: list, min_sep_px: float) -> lis
     return out
 
 
+def y_edge_band_thresholds(boundary, y_edge_frac: float) -> tuple[float, float] | None:
+    """与 ``filter_peak_yx_y_edge_bands`` 相同归一化准则下的两条分界线 y 坐标 (像素, 与 ion y0 一致).
+
+    第二轮若仅保留 y 向边缘带, 则保留 ``y <= y_below`` 或 ``y >= y_above`` 的候选
+    (``y_below = cy - (1-F)*b``, ``y_above = cy + (1-F)*b``, ``F = y_edge_frac``)。
+    无 boundary 时返回 None.
+    """
+    if boundary is None:
+        return None
+    _cx, cy, _a, b = boundary
+    f = float(y_edge_frac)
+    f = min(max(f, 1e-6), 1.0 - 1e-6)
+    thr = 1.0 - f
+    bsafe = max(float(b), 1e-9)
+    y_below = float(cy - thr * bsafe)
+    y_above = float(cy + thr * bsafe)
+    return y_below, y_above
+
+
 def filter_peak_yx_y_edge_bands(peak_yx, boundary, y_edge_frac: float):
     """仅保留靠近晶格椭圆 y 向两端的候选 (用于峰值剥离第二轮).
 
