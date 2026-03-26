@@ -20,6 +20,9 @@ from .pipeline import detect_ions
 from .viz import print_summary, visualize, visualize_peel_residual
 
 
+_PEEL_UNSET = object()  # --peak-peel 未传入
+
+
 def main():
     parser = argparse.ArgumentParser(description="离子检测与椭圆拟合可视化")
     parser.add_argument(
@@ -98,8 +101,15 @@ def main():
     )
     parser.add_argument(
         "--peak-peel",
-        action="store_true",
-        help="启用峰值剥离: 首轮拟合后减高斯核再在残差上检一轮并合并去重。",
+        nargs="?",
+        const="",
+        default=_PEEL_UNSET,
+        metavar="MODE",
+        help=(
+            "启用峰值剥离: 省略 MODE 为全图第二轮; MODE=edge 为仅 y 向边缘带第二轮 "
+            "(大小写不敏感); 其他 MODE 视为全图第二轮。若下一参数是帧下标，请写在其前或使用 "
+            "--peak-peel=edge。"
+        ),
     )
     parser.add_argument(
         "--peak-peel-min-sep",
@@ -107,13 +117,6 @@ def main():
         default=2.0,
         metavar="PX",
         help="剥离轮新峰与已有峰中心的最小距离 (像素)。",
-    )
-    parser.add_argument(
-        "--peak-peel-y-edges-only",
-        action="store_true",
-        help=(
-            "剥离第二轮仅在晶格椭圆 y 向边缘带内取候选并保留 (抑制中间区域重复小峰, 需能估计 boundary)。"
-        ),
     )
     parser.add_argument(
         "--peak-peel-y-edge-frac",
@@ -149,6 +152,13 @@ def main():
     )
     args = parser.parse_args()
 
+    if args.peak_peel is _PEEL_UNSET:
+        peak_peel = False
+        peak_peel_y_edges_only = False
+    else:
+        peak_peel = True
+        peak_peel_y_edges_only = str(args.peak_peel).strip().lower() == "edge"
+
     project_root = _PROJECT_ROOT
     data_dir = project_root / "20260305_1727"
     out_dir = OUT_ION_DETECT_IMGS
@@ -166,9 +176,9 @@ def main():
     if not selected_indices:
         raise ValueError("没有可处理的索引。请检查输入的 indices。")
 
-    if args.save_residual_img and not args.peak_peel:
+    if args.save_residual_img and not peak_peel:
         print("警告: --save-residual-img 已忽略 (需同时使用 --peak-peel)。")
-    want_residual = bool(args.save_residual_img and args.peak_peel)
+    want_residual = bool(args.save_residual_img and peak_peel)
 
     detect_kw = dict(
         use_y_threshold_comp=args.use_y_thresh_comp,
@@ -179,9 +189,9 @@ def main():
         use_matched_filter=not args.no_matched_filter,
         joint_pair_y_gap=args.joint_pair_y_gap,
         joint_pair_x_gap=args.joint_pair_x_gap,
-        peak_peel=args.peak_peel,
+        peak_peel=peak_peel,
         peak_peel_min_sep=args.peak_peel_min_sep,
-        peak_peel_y_edges_only=args.peak_peel_y_edges_only,
+        peak_peel_y_edges_only=peak_peel_y_edges_only,
         peak_peel_y_edge_frac=args.peak_peel_y_edge_frac,
         peak_peel_rel_threshold=args.peak_peel_rel_threshold,
         peak_peel_min_amp_frac=args.peak_peel_min_amp_frac,
@@ -237,7 +247,7 @@ def main():
                     output_path=residual_path,
                     boundary=boundary,
                     reference_image=image,
-                    peak_peel_y_edges_only=args.peak_peel_y_edges_only,
+                    peak_peel_y_edges_only=peak_peel_y_edges_only,
                     peak_peel_y_edge_frac=args.peak_peel_y_edge_frac,
                 )
 

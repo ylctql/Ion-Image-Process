@@ -12,3 +12,4 @@ OUT_HISTOGRAM = OUTPUTS_ROOT / "histogram"
 OUT_DATASET_VIZ = OUTPUTS_ROOT / "dataset_viz"  # project_info.py
 OUT_NPY_SELECTED = OUTPUTS_ROOT / "npy_plots"  # vis_selected_npy.py
 OUT_RESIDUAL_IMGS = OUTPUTS_ROOT / "residual_imgs"  # peak-peel 残差图
+OUT_EDGE_STRIP = OUTPUTS_ROOT / "edge_strip_profiles"  # edge_strip_profile.py 列轮廓 PNG

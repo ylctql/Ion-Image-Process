@@ -38,6 +38,7 @@ pip install numpy scipy matplotlib
   - `outputs/histogram/`：构型距离直方图
   - `outputs/dataset_viz/`：`project_info.py` 生成的数据集统计与热力图等
   - `outputs/npy_plots/`：`vis_selected_npy.py` 默认输出
+  - `outputs/edge_strip_profiles/`：`edge_strip_profile.py` 默认 PNG（常量 `OUT_EDGE_STRIP`）
 
 > `20260305_1727` 中每个 `npy` 被视为一帧图像（若为 3D 会按脚本逻辑处理）。
 
@@ -92,9 +93,8 @@ python -m ion_detect 0 5 -1 "::3,0:10"
 | `--no-matched-filter` | 关闭 | 默认**启用**匹配滤波 |
 | `--joint-pair-y-gap` | 未设置 | 不设则不启用联合双峰 |
 | `--joint-pair-x-gap` | 未设置 | 仅在设置 `jY` 时生效；未设则检测内为 `max(4, hw_x)`，`hw_x` 来自 `fit_hw` |
-| `--peak-peel` | 关闭 | |
+| `--peak-peel [MODE]` | 关闭 | 省略 `MODE` 为全图第二轮；`MODE=edge` 为仅 y 向边缘带第二轮 |
 | `--peak-peel-min-sep` | `2.0` | 像素 |
-| `--peak-peel-y-edges-only` | 关闭 | |
 | `--peak-peel-y-edge-frac` | `0.25` | |
 | `--peak-peel-rel-threshold` | 未传 | 与首轮 `rel_threshold` 相同（见下表） |
 | `--peak-peel-min-amp-frac` | 未传 | 不设则二轮不按振幅比例过滤 |
@@ -162,10 +162,10 @@ python -m ion_detect 0 --peak-peel
 
 # 同时保存首轮剥离后的残差图（默认 outputs/residual_imgs/peak_peel_residual_XXXX.png）
 python -m ion_detect 0 --peak-peel --save-residual-img
-# （若存在晶格 boundary，残差 PNG 上以淡洋红填充标出 |y-cy|/b>=1-F 的 y 向边缘带，F 即 --peak-peel-y-edge-frac，与第二轮 filter 准则一致；标题会标明是否启用了 --peak-peel-y-edges-only。）
+# （若存在晶格 boundary，残差 PNG 上以淡洋红填充标出 |y-cy|/b>=1-F 的 y 向边缘带，F 即 --peak-peel-y-edge-frac，与第二轮 filter 准则一致；仅在使用 `--peak-peel edge` 时标题会标明 y 向边缘模式。）
 
-# 第二轮只在晶格椭圆 y 向上下缘带内取候选（需能估计晶格 boundary）
-python -m ion_detect 0 --peak-peel --peak-peel-y-edges-only ^
+# 第二轮只在晶格椭圆 y 向上下缘带内取候选（需能估计晶格 boundary；`MODE` 写在下标之后，或用 `--peak-peel=edge` 避免与帧编号粘连）
+python -m ion_detect 0 --peak-peel edge ^
   --peak-peel-rel-threshold 0.04 ^
   --peak-peel-min-amp-frac 0.35
 ```
@@ -174,9 +174,8 @@ python -m ion_detect 0 --peak-peel --peak-peel-y-edges-only ^
 
 | 选项 | 含义 | 默认 |
 |------|------|------|
-| `--peak-peel` | 启用第二轮剥离检测 | 关 |
+| `--peak-peel [MODE]` | 启用第二轮剥离；`MODE` 省略=全图，`edge`=仅 y 向边缘候选 | 关 |
 | `--peak-peel-min-sep PX` | 新峰与已有峰中心最小距离（像素） | `2` |
-| `--peak-peel-y-edges-only` | 第二轮仅保留 `|y-cy|/b` 较大的 y 向边缘候选 | 关 |
 | `--peak-peel-y-edge-frac F` | 边缘带：保留 `|y-cy|/b ≥ 1-F` | `F=0.25` |
 | `--peak-peel-rel-threshold R` | 第二轮相对阈值 | 与首轮 `0.025` 相同 |
 | `--peak-peel-min-amp-frac Q` | 第二轮振幅须 ≥ `Q×` 首轮振幅中位数 | 不限制 |
@@ -185,7 +184,44 @@ python -m ion_detect 0 --peak-peel --peak-peel-y-edges-only ^
 
 代码中等价参数为 `detect_ions(..., peak_peel=True, return_peel_residual=True, ...)` 返回 `(ions, boundary, peel_residual)`，见 `ion_detect.pipeline.detect_ions` 文档字符串。
 
-### 3.7 包内模块分工（便于维护与二次开发）
+### 3.7 y 向外缘条带列轮廓（诊断上下缘漏检）
+
+与上表 **`|y-cy|/b ≥ 1-F`** 同一套截线（`y_below = cy - (1-F)*b`，`y_above = cy + (1-F)*b`）。在 **上下两侧各** 取一轴对齐矩形：**y** 从椭圆在 **竖直方向的极点**（`cy ∓ b`，与 `boundary` 的 y 半轴一致）到对应截线；**x** 取该截线与椭圆边界的两交点之间的弦（`|x-cx| ≤ a·√(1 - ((y_cut-cy)/b)²)`）。对条带掩膜内像素按列做 **聚合**（`--col-metric`：`sum` / `mean` / `max`）得到 1D 曲线，脚本会保存曲线图并用抛物线插值细化 **峰值 x**（控制台亦打印）。
+
+独立工具 **不加** `peak-peel` 前缀。`raw` / `bgsub` 时在 **`image -` 高斯背景** 上调用 `estimate_crystal_boundary`（与 `detect_ions` 估计 boundary 的方式一致）。**`peel` / `peel_bgsub`** 时在同一帧上调用 `detect_ions(..., peak_peel=True, return_peel_residual=True)`，从返回值中取 **boundary** 与残差（或可再减背景）图，**须首轮能检出离子** 才有有效残差。**`--preprocess`** 只决定送入条带 **按列聚合** 的二维图（与 `--col-metric` 的 sum/mean/max 正交）。
+
+**图上两类竖线（与实现一致）**：
+
+- **红虚线 + 红点**（子图 `Top/Bottom strip`）：整条 1D 剖面的 **全局最大**，经三点抛物线细化（`outer_y_edge_column_profiles`），**不受** `--peak-dist` 影响。
+- **番茄红 / 绿色虚线**（叠在顶栏灰度图上）：上下条带剖面上的 **多峰示意**；由严格离散局部极大经 **`--peak-dist`** 最小间距筛选；过近的一对去低 **prominence** 峰（`scipy.signal.peak_prominences`，平手比剖面幅值）。
+
+```bash
+python edge_strip_profile.py 0
+python edge_strip_profile.py 0 5 --y-edge-frac 0.25 --preprocess bgsub
+python edge_strip_profile.py 0 --preprocess peel
+python edge_strip_profile.py 0 --preprocess peel_bgsub
+python edge_strip_profile.py 0 --preprocess peel --plot-peel
+python edge_strip_profile.py 0 --col-metric max --peak-dist 3
+python edge_strip_profile.py ::20 --out outputs/edge_strip_profiles
+# 全部选项：python edge_strip_profile.py -h
+```
+
+| 选项 | 含义 | 默认 |
+|------|------|------|
+| 位置参数 `indices` | 与 `python -m ion_detect` 相同 numpy 风格切片并集 | `0` |
+| `--y-edge-frac F` | 与 peak-peel 相同的 F，截线 `|y-cy|/b = 1-F` | `0.25` |
+| `--preprocess` | `raw`；`bgsub`（`image -` 高斯背景）；`peel`（首轮 peak-peel 残差）；`peel_bgsub`（残差再减高斯背景，与检测二轮 map 输入一致）；后二者须首轮检出离子 | `raw` |
+| `--col-metric` | 条带掩膜内按列 `sum` / `mean` / `max`；`mean` 整除该列掩膜像素数；`max` 在无掩膜列为 NaN；绘图时 `mean`/`max` 在无掩膜列不连线 | `mean` |
+| `--plot-peel` | 仅 `peel` / `peel_bgsub`：顶栏 `imshow` 用 peel（或 peel+bgsub）图；**默认** 顶栏为原始载入的 `npy` | 关 |
+| `--peak-dist D` | 见上文「叠图虚线」：相邻候选峰在 x 上须 **>** `D`（px）；`D≤0` 则标出全部严格局部极大 | `5` |
+| `--no-clip-ellipse` | 条带不按椭圆再裁剪（整块轴对齐条带矩形参与掩膜/聚合） | 否 |
+| `--show` | 处理完后 **交互弹窗** `plt.show()`（仍会写入 `--out` 下 PNG） | 关 |
+| `--data-dir` | `.npy` 目录 | `PROJECT_ROOT/20260305_1727`（与包内 CLI 一致） |
+| `--out` | PNG 目录 | `outputs/edge_strip_profiles`（`output_paths.OUT_EDGE_STRIP`） |
+
+代码：`ion_detect.edge_strip.outer_y_edge_column_profiles`（参数 `col_metric`，默认 `mean`；亦导出在 `ion_detect` 包根）。
+
+### 3.8 包内模块分工（便于维护与二次开发）
 
 | 模块 | 职责 |
 |------|------|
@@ -195,6 +231,7 @@ python -m ion_detect 0 --peak-peel --peak-peel-y-edges-only ^
 | `ion_detect.preprocess` | 匹配滤波、y 向阈值缩放、局部极大候选 |
 | `ion_detect.fitting` | 单峰/联合双峰拟合与精修 |
 | `ion_detect.peel` | 合并去重、y 向边缘带过滤 |
+| `ion_detect.edge_strip` | y 向外缘条带按列聚合（sum/mean/max）与主峰值（与 peel 同一 F 几何） |
 | `ion_detect.viz` | `visualize`、`print_summary` |
 | `ion_detect.cli_helpers` | 命令行索引解析 |
 | `output_paths`（根目录模块） | `outputs/` 下 `ion_detect_imgs`、`IonPos`、`amp_y_fit` 等默认路径 |
@@ -341,7 +378,7 @@ python .\project_info.py
 - 漏检边缘离子：尝试开启 `--use-y-thresh-comp`，并降低 `--comp-floor`（如 `0.15`）。
 - 噪点过多：提高 `--comp-floor` 或减小补偿强度；必要时提高 `rel_threshold`（CLI / `gallery` 中 `rel` 文本框，或代码中 `detect_ions(..., rel_threshold=...)`）。
 - **y 向靠得很近、单峰拟合不稳**：可尝试 `--joint-pair-y-gap`（略小于典型竖直间距）；`DY` 过大易误配对。
-- **重叠导致漏检（尤其上下缘）**：可试 `--peak-peel`，并配合 `--peak-peel-y-edges-only` 与略高的 `--peak-peel-rel-threshold` / `--peak-peel-min-amp-frac`，减少中间区域假小峰。
+- **重叠导致漏检（尤其上下缘）**：可试 `--peak-peel`，并配合 `--peak-peel edge` 与略高的 `--peak-peel-rel-threshold` / `--peak-peel-min-amp-frac`，减少中间区域假小峰。
 - **固定 θ 拟合**：离子拉长方向与坐标轴一致时可试 `--fix-theta-zero`；一般旋转 PSF 仍用默认旋转高斯。
 - 形变分析时：优先保证样本数量（`-n` 更大），并对比 `quadratic / quartic / gaussian` 的拟合稳定性与 `R^2`。
 
@@ -356,6 +393,7 @@ python .\project_info.py
 - `stretching_analysis.py`：y 向统计拟合分析
 - `dist.py`：构型距离统计
 - `vis_selected_npy.py`：指定帧矩阵导出 PNG
+- `edge_strip_profile.py`：y 向外缘条带按列聚合与主峰值/多峰示意（`--preprocess`、`--col-metric`、`--peak-dist` 等，见 **§3.7**）
 - `project_info.py`：数据集统计与概览图
 - `.gitignore`：忽略数据、缓存与本地环境文件
 
