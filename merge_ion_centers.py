@@ -4,7 +4,7 @@
 规则简述：
 - 在椭圆内、外缘 y 条带几何（与 edge_strip 一致）且 x 落在 [edge_x_lo, edge_x_hi] 的上下两域内，仅采用条带辅助峰 + COM 的中心，丢弃落在该域内的 ion_detect 结果。
 - 其余椭圆内区域仅采用 ion_detect，条带点若落入该区域一般会因几何不可能（条带点在上下条带内）而自然为空集；条带在 x 域外的峰被丢弃。
-- 对 detect 与 strip 的中心，若欧氏距离 ≤ ion-dist（默认 5），替换为二者坐标算术平均（贪心每次合并当前最近的一对）；fit 参数等保留自 detect 项。
+- 对 detect 与 strip 的中心，若欧氏距离 ≤ ion-dist（默认 4），替换为二者坐标算术平均（贪心每次合并当前最近的一对）；fit 参数等保留自 detect 项。
 
 示例：
   python merge_ion_centers.py 0
@@ -385,7 +385,7 @@ def main() -> None:
     parser.add_argument(
         "--ion-dist",
         type=float,
-        default=5.0,
+        default=4.0,
         metavar="PX",
         help=(
             "detect 与 strip_top/strip_bot 中心距离 ≤ 该值（像素）时合并为坐标均值；"

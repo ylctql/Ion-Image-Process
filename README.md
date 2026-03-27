@@ -246,7 +246,7 @@ python edge_strip_profile.py ::20 --out outputs/edge_strip_profiles
 
 - 在 **椭圆内**、**上下外缘 y 条带**（与 `outer_y_edge_strip_masks` 一致，由 `--y-edge-frac` 控制）且 **x** 落在 **`--edge-x-range X0 X1`**（默认 `250 750`）内：仅保留该 x 段上的 **条带辅助峰 + 列向 COM**（由 `fitted_xy_for_auxiliary_strip_peaks`）；**丢弃**落在此域内的 `ion_detect` 中心。
 - **其余**（含外缘行但在 x 段之外）：仅保留 `ion_detect`；条带在该 x 段外的峰不参加合并。
-- **`--ion-dist`**（默认 `5`，像素）：对 **detect** 与 **strip_top / strip_bot** 成对、欧氏距离 **≤** 该阈值的，反复合并 **最近** 的一对，**中心取坐标算术平均**，`sigma` / `amplitude` 等仍取自 detect；合并后 `source=fused_mean`（图上为洋红色）。**≤0** 关闭此步。**注意**：阈值若大于约半格距，可能误并相邻两个离子，请按数据微调。
+- **`--ion-dist`**（默认 `4`，像素）：对 **detect** 与 **strip_top / strip_bot** 成对、欧氏距离 **≤** 该阈值的，反复合并 **最近** 的一对，**中心取坐标算术平均**，`sigma` / `amplitude` 等仍取自 detect；合并后 `source=fused_mean`（图上为洋红色）。**≤0** 关闭此步。**注意**：阈值若大于约半格距，可能误并相邻两个离子，请按数据微调。
 
 条带侧默认与常用诊断一致：`--y-fit-frac`（默认 `0.35`）、`--strip-center-mode com`、可选用 `--add-neighbor-x`；`--preprocess` 仅作用于送入条带 **按列聚合** 的二维图，`detect_ions` 始终用原图流水线。
 
@@ -254,7 +254,7 @@ python edge_strip_profile.py ::20 --out outputs/edge_strip_profiles
 python merge_ion_centers.py 0
 python merge_ion_centers.py 0 --add-neighbor-x
 python merge_ion_centers.py 0 --edge-x-range 250 750 --y-edge-frac 0.25 ^
-  --y-fit-frac 0.35 --peak-dist 5 --ion-dist 5
+  --y-fit-frac 0.35 --peak-dist 5 --ion-dist 4
 python merge_ion_centers.py ::10 --out outputs/ion_centers_merged
 # 全部选项：python merge_ion_centers.py -h
 ```
@@ -269,7 +269,7 @@ python merge_ion_centers.py ::10 --out outputs/ion_centers_merged
 | `--col-metric` | `sum` / `mean` / `max` | `mean` |
 | `--strip-center-mode` | `com` / `com_fit` / `fit` | `com` |
 | `--add-neighbor-x` | 列 profile 用 x−1,x,x+1 三列和 | 关 |
-| `--ion-dist PX` | detect 与 strip 中心距离 ≤ PX 时合并为均值；≤0 关闭 | `5` |
+| `--ion-dist PX` | detect 与 strip 中心距离 ≤ PX 时合并为均值；≤0 关闭 | `4` |
 | `--preprocess` | 送入条带的图：`raw` / `bgsub` / `peel` / `peel_bgsub`（后两者须首轮能检出离子） | `raw` |
 | `--no-clip-ellipse` | 条带不按椭圆裁剪 | 否 |
 | `--no-matched-filter` | `detect_ions` 禁用匹配滤波 | 否 |

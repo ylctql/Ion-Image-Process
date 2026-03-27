@@ -5,6 +5,30 @@ from scipy.optimize import curve_fit
 from .gaussian import _gauss2d, _gauss2d_aligned, _two_gauss2d_aligned_flat
 
 
+def weighted_r2(y, yhat, sigma):
+    """与 ``curve_fit(..., sigma=...)`` 一致的加权 R²。
+
+    权重 w_i = 1/σ_i²，ȳ = Σ w y / Σ w，
+    R²_w = 1 - Σ w (y-ŷ)² / Σ w (y-ȳ)²。
+    """
+    y = np.asarray(y, dtype=np.float64).ravel()
+    yhat = np.asarray(yhat, dtype=np.float64).ravel()
+    sigma = np.asarray(sigma, dtype=np.float64).ravel()
+    if y.shape != yhat.shape or y.shape != sigma.shape:
+        return float("nan")
+    w = 1.0 / np.clip(sigma ** 2, 1e-30, None)
+    sw = float(np.sum(w))
+    if sw <= 0.0 or not np.isfinite(sw):
+        return float("nan")
+    y_bar = float(np.sum(w * y) / sw)
+    ss_res = float(np.sum(w * (y - yhat) ** 2))
+    ss_tot = float(np.sum(w * (y - y_bar) ** 2))
+    if ss_tot <= 1e-30 or not np.isfinite(ss_tot):
+        return float("nan")
+    r2 = 1.0 - ss_res / ss_tot
+    return float(r2) if np.isfinite(r2) else float("nan")
+
+
 def soft_weight_map(ph, pw_, ly, lx, hw_y, hw_x):
     """与单峰 weight_template 同形状的软权重, 可贴任意大小 ROI。"""
     yy, xx = np.mgrid[0:ph, 0:pw_].astype(np.float64)
@@ -169,6 +193,8 @@ def fit_single_peak_at(
                 p0=p0, bounds=(lo, hi), maxfev=2000,
                 sigma=fit_sigma.ravel(),
             )
+            yhat = _gauss2d_aligned((xx.ravel(), yy.ravel()), *popt)
+            r2_w = weighted_r2(patch.ravel(), yhat, fit_sigma.ravel())
             amp, fx, fy, sx, sy, offset = popt
             if sx > sy:
                 sigma_minor, sigma_major = sy, sx
@@ -184,6 +210,8 @@ def fit_single_peak_at(
                 p0=p0, bounds=(lo, hi), maxfev=2000,
                 sigma=fit_sigma.ravel(),
             )
+            yhat = _gauss2d((xx.ravel(), yy.ravel()), *popt)
+            r2_w = weighted_r2(patch.ravel(), yhat, fit_sigma.ravel())
             amp, fx, fy, sx, sy, theta, offset = popt
 
             if sx > sy:
@@ -214,6 +242,7 @@ def fit_single_peak_at(
         "sigma_minor": sigma_minor, "sigma_major": sigma_major,
         "theta_deg": theta_deg,
         "amplitude": amp,
+        "r2_weighted": r2_w,
         "_py": py, "_px": px,
     }
     if fix_theta_zero:
@@ -268,6 +297,10 @@ def fit_joint_two_peaks_at(
     except (RuntimeError, ValueError):
         return None
 
+    yhat = _two_gauss2d_aligned_flat(
+        (xx.ravel(), yy.ravel()), *popt,
+    )
+    r2_w = weighted_r2(patch.ravel(), yhat, fit_sigma.ravel())
     a1, fx1, fy1, sx1, sy1, a2, fx2, fy2, sx2, sy2, offset = popt
     gx1, gy1 = x1 + fx1, y1 + fy1
     gx2, gy2 = x1 + fx2, y1 + fy2
@@ -300,6 +333,7 @@ def fit_joint_two_peaks_at(
             "sigma_minor": smin, "sigma_major": smaj,
             "theta_deg": 0.0,
             "amplitude": amp,
+            "r2_weighted": r2_w,
             "_sigma_x": float(sx),
             "_sigma_y": float(sy),
             "_py": py, "_px": px,

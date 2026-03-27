@@ -1,4 +1,4 @@
-"""可视化与结果摘要。"""
+"""Visualization and console summaries for detection output."""
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
@@ -6,29 +6,100 @@ from matplotlib.patches import Ellipse
 from .peel import y_edge_band_thresholds
 
 
-def visualize(image, ions, n_sigma=2.0, title="", output_path=None,
-              show_zoom=True, zoom_center=None, zoom_size=80,
-              boundary=None):
-    """
-    在图像上标注拟合椭圆。
+_VIS_ASPECT = "auto"
 
-    n_sigma 控制椭圆的半轴长度 (n_sigma * sigma)。
-    boundary: (cx, cy, a, b) 晶格边界椭圆参数, 若提供则绘制在图上。
-    可选显示一个局部放大区域。
-    zoom_center / zoom_size 保留为兼容参数, 当前未使用 (放大区域为内置固定列表)。
+
+def _plot_weighted_r2_panel(ax, image, ions, boundary, n_sigma):
+    """Panel below main image: weighted R² at each ion location."""
+    im = np.asarray(image, dtype=np.float64)
+    vmin_i = float(np.percentile(im, 1))
+    vmax_i = float(np.percentile(im, 99.5))
+    ax.imshow(im, cmap="gray", aspect=_VIS_ASPECT, vmin=vmin_i, vmax=vmax_i, alpha=0.42)
+    for ion in ions:
+        ell = Ellipse(
+            xy=(ion["x0"], ion["y0"]),
+            width=2 * n_sigma * ion["sigma_minor"],
+            height=2 * n_sigma * ion["sigma_major"],
+            angle=ion["theta_deg"],
+            edgecolor="red", facecolor="none", linewidth=0.35, alpha=0.65,
+        )
+        ax.add_patch(ell)
+    if boundary is not None:
+        bcx, bcy, ba, bb = boundary
+        bnd_ell = Ellipse(
+            xy=(bcx, bcy), width=2 * ba, height=2 * bb, angle=0,
+            edgecolor="cyan", facecolor="none",
+            linewidth=1.0, linestyle="--", alpha=0.85,
+        )
+        ax.add_patch(bnd_ell)
+    if not ions:
+        ax.set_title("Fit quality (weighted R²): no ions detected", fontsize=12)
+        ax.set_xlabel("x (pixel)")
+        ax.set_ylabel("y (pixel)")
+        return
+    xs = np.array([float(ion["x0"]) for ion in ions], dtype=np.float64)
+    ys = np.array([float(ion["y0"]) for ion in ions], dtype=np.float64)
+    vals = np.array(
+        [
+            float("nan") if ion.get("r2_weighted") is None else float(ion["r2_weighted"])
+            for ion in ions
+        ],
+        dtype=np.float64,
+    )
+    valid = np.isfinite(vals)
+    if not valid.any():
+        ax.scatter(xs, ys, s=28, c="0.7", edgecolors="k", linewidths=0.25, zorder=5)
+        ax.set_title("Fit quality (weighted R²): no valid values", fontsize=12)
+    else:
+        v_ok = vals[valid]
+        c_lo = float(np.min(v_ok))
+        c_hi = float(np.max(v_ok))
+        vmin_c = min(0.0, c_lo)
+        vmax_c = max(1.0, c_hi)
+        if vmax_c - vmin_c < 1e-9:
+            vmax_c = vmin_c + 1e-6
+        sc = ax.scatter(
+            xs[valid], ys[valid], c=v_ok, cmap="RdYlGn", s=42,
+            vmin=vmin_c, vmax=vmax_c, edgecolors="0.15", linewidths=0.25, zorder=6,
+        )
+        plt.colorbar(sc, ax=ax, fraction=0.025, pad=0.02, label="Weighted R²")
+        n_bad = int(np.sum(~valid))
+        tail = f"; {n_bad} without R²" if n_bad else ""
+        ax.set_title(
+            f"Fit quality (weighted R², same weights as curve_fit)  "
+            f"[min={float(np.nanmin(v_ok)):.3f}, max={float(np.nanmax(v_ok)):.3f}, "
+            f"median={float(np.nanmedian(v_ok)):.3f}]{tail}",
+            fontsize=11,
+        )
+    ax.set_xlabel("x (pixel)")
+    ax.set_ylabel("y (pixel)")
+
+
+def visualize(image, ions, n_sigma=2.0, title="", output_path=None,
+              boundary=None, show_fit_quality=True, show=False):
     """
-    _ = (zoom_center, zoom_size)
-    nrows = 6 if show_zoom else 1
-    fig, axes = plt.subplots(nrows, 1,
-                             figsize=(20, 5 + (3 * 5 if show_zoom else 0)),
-                             gridspec_kw={"height_ratios": [5, 2, 3, 3, 3, 2]
-                                          if show_zoom else [1]})
-    if not show_zoom:
-        axes = [axes]
+    Draw the frame with fitted ellipses.
+
+    n_sigma scales ellipse axes (n_sigma * sigma).
+    boundary: (cx, cy, a, b) lattice-boundary ellipse, drawn if given.
+    If show_fit_quality is True, add a second panel with weighted R² per ion.
+    If show is True, open an interactive window (``plt.show()``); still saves when
+    output_path is set.
+    """
+    height_ratios = [5, 2] if show_fit_quality else [5]
+    nrows = len(height_ratios)
+    fig_h = 5.0 + (2.6 if show_fit_quality else 0.0)
+    fig, axes = plt.subplots(
+        nrows, 1, figsize=(20, fig_h),
+        gridspec_kw={"height_ratios": height_ratios},
+    )
+    axes = np.atleast_1d(axes).ravel()
+
+    r2_row = 1 if show_fit_quality else None
 
     ax = axes[0]
-    ax.imshow(image, cmap="gray", aspect="auto", vmin=np.percentile(image, 1),
-              vmax=np.percentile(image, 99.5))
+    ax.imshow(image, cmap="gray", aspect=_VIS_ASPECT,
+              vmin=np.percentile(image, 1), vmax=np.percentile(image, 99.5))
     for ion in ions:
         ell = Ellipse(
             xy=(ion["x0"], ion["y0"]),
@@ -53,56 +124,15 @@ def visualize(image, ions, n_sigma=2.0, title="", output_path=None,
     ax.set_xlabel("x (pixel)")
     ax.set_ylabel("y (pixel)")
 
-    if show_zoom:
-        regions = [
-            ("Top edge",    (500, 35),  100, 20),
-            ("Left",        (200, 75),   60, 30),
-            ("Center",      (500, 85),   60, 30),
-            ("Right",       (800, 75),   60, 30),
-            ("Bottom edge", (500, 130), 100, 20),
-        ]
-        for i, (label, (rcx, rcy), rzs_x, rzs_y) in enumerate(regions):
-            ax2 = axes[1 + i]
-            x1z = max(0, rcx - rzs_x)
-            x2z = min(image.shape[1], rcx + rzs_x)
-            y1z = max(0, rcy - rzs_y)
-            y2z = min(image.shape[0], rcy + rzs_y)
-
-            ax2.imshow(image, cmap="gray", aspect="equal",
-                       vmin=np.percentile(image, 1),
-                       vmax=np.percentile(image, 99.5))
-            for ion in ions:
-                if x1z <= ion["x0"] <= x2z and y1z <= ion["y0"] <= y2z:
-                    ell = Ellipse(
-                        xy=(ion["x0"], ion["y0"]),
-                        width=2 * n_sigma * ion["sigma_minor"],
-                        height=2 * n_sigma * ion["sigma_major"],
-                        angle=ion["theta_deg"],
-                        edgecolor="lime", facecolor="none", linewidth=1.2,
-                    )
-                    ax2.add_patch(ell)
-                    ax2.plot(ion["x0"], ion["y0"], "r.", markersize=2)
-            if boundary is not None:
-                bcx, bcy, ba, bb = boundary
-                bnd_ell = Ellipse(
-                    xy=(bcx, bcy), width=2 * ba, height=2 * bb, angle=0,
-                    edgecolor="cyan", facecolor="none",
-                    linewidth=1.5, linestyle="--", alpha=0.9,
-                )
-                ax2.add_patch(bnd_ell)
-            ax2.set_xlim(x1z, x2z)
-            ax2.set_ylim(y2z, y1z)
-            ax2.set_title(
-                f"Zoom: {label}  x=[{x1z},{x2z}]  y=[{y1z},{y2z}]",
-                fontsize=11,
-            )
-            ax2.set_xlabel("x (pixel)")
-            ax2.set_ylabel("y (pixel)")
+    if show_fit_quality and r2_row is not None:
+        _plot_weighted_r2_panel(axes[r2_row], image, ions, boundary, n_sigma)
 
     fig.tight_layout()
     if output_path:
         fig.savefig(output_path, dpi=200)
-        print(f"[已保存] {output_path}")
+        print(f"[Saved] {output_path}")
+    if show:
+        plt.show()
     plt.close(fig)
 
 
@@ -114,6 +144,7 @@ def visualize_peel_residual(
     reference_image=None,
     peak_peel_y_edges_only=False,
     peak_peel_y_edge_frac=0.25,
+    show=False,
 ):
     """Peak-peel residual (raw image minus first-round Gaussian sum).
 
@@ -126,6 +157,9 @@ def visualize_peel_residual(
     ``|y-cy|/b >= 1 - peak_peel_y_edge_frac`` (same as
     ``filter_peak_yx_y_edge_bands``). Round-2 actually restricts to these bands
     only if ``peak_peel_y_edges_only`` is enabled in the detection run.
+
+    If show is True, display the figure with ``plt.show()`` (after saving if
+    output_path is set).
     """
     fig, ax = plt.subplots(1, 1, figsize=(14, 8))
     if reference_image is not None:
@@ -219,29 +253,45 @@ def visualize_peel_residual(
     fig.tight_layout()
     if output_path:
         fig.savefig(output_path, dpi=200)
-        print(f"[已保存残差图] {output_path}")
+        print(f"[Saved residual] {output_path}")
+    if show:
+        plt.show()
     plt.close(fig)
 
 
 def print_summary(ions):
     if not ions:
-        print("未检测到离子。")
+        print("No ions detected.")
         return
     minors = np.array([d["sigma_minor"] for d in ions])
     majors = np.array([d["sigma_major"] for d in ions])
     amps   = np.array([d["amplitude"]   for d in ions])
     ratios = majors / minors
 
-    print(f"\n检测结果: {len(ions)} 个离子")
-    print(f"  σ_minor  (短轴): mean={minors.mean():.2f} ± {minors.std():.2f}  "
+    print(f"\nDetection: {len(ions)} ions")
+    r2_list = [d.get("r2_weighted") for d in ions]
+    if any(v is not None for v in r2_list):
+        r2_arr = np.array(
+            [np.nan if v is None else float(v) for v in r2_list],
+            dtype=np.float64,
+        )
+        ok = np.isfinite(r2_arr)
+        if ok.any():
+            ra = r2_arr[ok]
+            print(
+                f"  Weighted R² (patch fit): mean={ra.mean():.3f} ± {ra.std():.3f}  "
+                f"range=[{ra.min():.3f}, {ra.max():.3f}]  "
+                f"(n={int(ok.sum())}/{len(ions)})"
+            )
+    print(f"  σ_minor: mean={minors.mean():.2f} ± {minors.std():.2f}  "
           f"range=[{minors.min():.2f}, {minors.max():.2f}]")
-    print(f"  σ_major  (长轴): mean={majors.mean():.2f} ± {majors.std():.2f}  "
+    print(f"  σ_major: mean={majors.mean():.2f} ± {majors.std():.2f}  "
           f"range=[{majors.min():.2f}, {majors.max():.2f}]")
-    print(f"  长短轴比 (major/minor): mean={ratios.mean():.2f} ± {ratios.std():.2f}")
-    print(f"  振幅: mean={amps.mean():.1f} ± {amps.std():.1f}  "
+    print(f"  Axis ratio (major/minor): mean={ratios.mean():.2f} ± {ratios.std():.2f}")
+    print(f"  Amplitude: mean={amps.mean():.1f} ± {amps.std():.1f}  "
           f"range=[{amps.min():.1f}, {amps.max():.1f}]")
 
     xs = np.array([d["x0"] for d in ions])
     ys = np.array([d["y0"] for d in ions])
-    print(f"  中心范围:  x ∈ [{xs.min():.1f}, {xs.max():.1f}],  "
+    print(f"  Center range: x ∈ [{xs.min():.1f}, {xs.max():.1f}],  "
           f"y ∈ [{ys.min():.1f}, {ys.max():.1f}]")

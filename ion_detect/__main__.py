@@ -150,6 +150,14 @@ def main():
         default=None,
         help="残差图保存目录，默认 outputs/residual_imgs。",
     )
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        help=(
+            "弹窗显示检测图与（若有）残差图；关闭当前窗口后继续下一帧。"
+            "仍会保存 PNG（与默认一致）。"
+        ),
+    )
     args = parser.parse_args()
 
     if args.peak_peel is _PEEL_UNSET:
@@ -230,10 +238,15 @@ def main():
             print(f"[已保存离子中心] {pos_path}")
 
         out_path = out_dir / f"ion_ellipses_{idx:04d}.png"
-        visualize(image, ions, n_sigma=2.0,
-                  title=f"[{idx:04d}] {target.name}",
-                  output_path=out_path,
-                  show_zoom=True, boundary=boundary)
+        visualize(
+            image,
+            ions,
+            n_sigma=2.0,
+            title=f"[{idx:04d}] {target.name}",
+            output_path=out_path,
+            boundary=boundary,
+            show=args.show,
+        )
 
         if want_residual:
             if peel_residual is None:
@@ -249,6 +262,7 @@ def main():
                     reference_image=image,
                     peak_peel_y_edges_only=peak_peel_y_edges_only,
                     peak_peel_y_edge_frac=args.peak_peel_y_edge_frac,
+                    show=args.show,
                 )
 
 
