@@ -5,6 +5,8 @@
 - 单帧离子检测与椭圆拟合：核心实现为 **`ion_detect` 包**；根目录 `ion_detection.py` 为兼容入口（`detect_ions` / 命令行）
 - 交互式浏览与手动触发检测（`gallery.py`）
 - 形变与亮度随 `y` 方向统计拟合（`stretching_analysis.py`）
+- 固定 **x** 条带内按行积分，观察 **y** 向分层/条纹（`y_layer_profile.py`）
+- 中心区域 `ion_detect` 与上下缘条带 COM **合并离子中心**（`merge_ion_centers.py`）
 - 多构型距离统计与直方图（`dist.py`）
 - 数据集整体统计与示例图（`project_info.py`）
 - 指定若干帧导出矩阵 PNG（`vis_selected_npy.py`）
@@ -39,6 +41,8 @@ pip install numpy scipy matplotlib
   - `outputs/dataset_viz/`：`project_info.py` 生成的数据集统计与热力图等
   - `outputs/npy_plots/`：`vis_selected_npy.py` 默认输出
   - `outputs/edge_strip_profiles/`：`edge_strip_profile.py` 默认 PNG（常量 `OUT_EDGE_STRIP`）
+  - `outputs/y_layer_profiles/`：`y_layer_profile.py` 默认 PNG（常量 `OUT_Y_LAYER_PROFILE`）
+  - `outputs/ion_centers_merged/`：`merge_ion_centers.py` 默认 PNG（常量 `OUT_ION_CENTERS_MERGED`）
 
 > `20260305_1727` 中每个 `npy` 被视为一帧图像（若为 3D 会按脚本逻辑处理）。
 
@@ -188,12 +192,16 @@ python -m ion_detect 0 --peak-peel edge ^
 
 与上表 **`|y-cy|/b ≥ 1-F`** 同一套截线（`y_below = cy - (1-F)*b`，`y_above = cy + (1-F)*b`）。在 **上下两侧各** 取一轴对齐矩形：**y** 从椭圆在 **竖直方向的极点**（`cy ∓ b`，与 `boundary` 的 y 半轴一致）到对应截线；**x** 取该截线与椭圆边界的两交点之间的弦（`|x-cx| ≤ a·√(1 - ((y_cut-cy)/b)²)`）。对条带掩膜内像素按列做 **聚合**（`--col-metric`：`sum` / `mean` / `max`）得到 1D 曲线，脚本会保存曲线图并用抛物线插值细化 **峰值 x**（控制台亦打印）。
 
+**实现结构**：列剖面核心算法在 `ion_detect.edge_strip_profile_analysis`，总览图与「逐列 y 剖面」交互窗口在 `ion_detect.edge_strip_profile_viz`；根目录 **`edge_strip_profile.py`** 仅为命令行入口（用法见其文件头注释）。
+
 独立工具 **不加** `peak-peel` 前缀。`raw` / `bgsub` 时在 **`image -` 高斯背景** 上调用 `estimate_crystal_boundary`（与 `detect_ions` 估计 boundary 的方式一致）。**`peel` / `peel_bgsub`** 时在同一帧上调用 `detect_ions(..., peak_peel=True, return_peel_residual=True)`，从返回值中取 **boundary** 与残差（或可再减背景）图，**须首轮能检出离子** 才有有效残差。**`--preprocess`** 只决定送入条带 **按列聚合** 的二维图（与 `--col-metric` 的 sum/mean/max 正交）。
 
 **图上两类竖线（与实现一致）**：
 
 - **红虚线 + 红点**（子图 `Top/Bottom strip`）：整条 1D 剖面的 **全局最大**，经三点抛物线细化（`outer_y_edge_column_profiles`），**不受** `--peak-dist` 影响。
-- **番茄红 / 绿色虚线**（叠在顶栏灰度图上）：上下条带剖面上的 **多峰示意**；由严格离散局部极大经 **`--peak-dist`** 最小间距筛选；过近的一对去低 **prominence** 峰（`scipy.signal.peak_prominences`，平手比剖面幅值）。
+- **番茄红 / 绿色虚线**（叠在顶栏灰度图上）：上下条带剖面上的 **多峰示意**；由严格离散局部极大经 **`--peak-dist`** 最小间距筛选；过近的一对去低 **prominence** 峰（`scipy.signal.peak_prominences`；平手取 **y 较大** 者）。
+
+**辅助峰列的 y 向诊断（`--peak-col-gallery` / `--plot-center`）**：在轮廓算法得到的每个辅助峰 **列** 上，沿 **y** 采样条带内像素（可用 `--y-fit-frac` 单独加宽约 `--y-edge-frac` 语义，条带 1D 轮廓与辅助峰 **x** 仍由 `--y-edge-frac` 决定）；可选 **x−1,x,x+1 三列求和**（`--add-neighbor-x`）。中心标点：`--plot-center` 可选 `fit`（默认，单/双高斯或 `--prominence`）、`com`（亮度加权质心）、`com_fit`（质心后取最近严格局部极大）；`--double-peak-fit` 强制双高斯曲线拟合；`--prominence [MIN]` 优先用 prominence 选两峰平均。**`--peak-col-gallery`** 会额外打开可滑动切换峰序号、单选项切换上/下条带的交互窗口，并隐含 **`--show`**（若在 IDE 内联后端无响应，请在系统终端设置 GUI 后端，例如 PowerShell：`$env:MPLBACKEND='TkAgg'; python edge_strip_profile.py 0 --peak-col-gallery`）。
 
 ```bash
 python edge_strip_profile.py 0
@@ -202,6 +210,9 @@ python edge_strip_profile.py 0 --preprocess peel
 python edge_strip_profile.py 0 --preprocess peel_bgsub
 python edge_strip_profile.py 0 --preprocess peel --plot-peel
 python edge_strip_profile.py 0 --col-metric max --peak-dist 3
+python edge_strip_profile.py 0 --peak-col-gallery --y-fit-frac 0.35
+python edge_strip_profile.py 0 --plot-center
+python edge_strip_profile.py 0 --plot-center com --prominence 0.5
 python edge_strip_profile.py ::20 --out outputs/edge_strip_profiles
 # 全部选项：python edge_strip_profile.py -h
 ```
@@ -214,14 +225,84 @@ python edge_strip_profile.py ::20 --out outputs/edge_strip_profiles
 | `--col-metric` | 条带掩膜内按列 `sum` / `mean` / `max`；`mean` 整除该列掩膜像素数；`max` 在无掩膜列为 NaN；绘图时 `mean`/`max` 在无掩膜列不连线 | `mean` |
 | `--plot-peel` | 仅 `peel` / `peel_bgsub`：顶栏 `imshow` 用 peel（或 peel+bgsub）图；**默认** 顶栏为原始载入的 `npy` | 关 |
 | `--peak-dist D` | 见上文「叠图虚线」：相邻候选峰在 x 上须 **>** `D`（px）；`D≤0` 则标出全部严格局部极大 | `5` |
+| `--peak-col-gallery` | 辅助峰列上沿 y 的 profile + 一维高斯拟合，滑动条切换峰；隐含 `--show` | 关 |
+| `--plot-center [MODE]` | 顶图标注辅助峰列的 y 中心；省略 `MODE` 为 `fit`；可选 `com`、`com_fit` | 不标注 |
+| `--double-peak-fit` | 列 y-profile 用双高斯（与 gallery / plot-center 联用） | 关 |
+| `--prominence [MIN]` | prominence 筛选后取最多两峰平均作为中心；单独写时 `MIN=0` | 未启用 |
+| `--y-fit-frac Ff` | 列 y 采样/拟合条带宽度（F 语义同 `--y-edge-frac`）；省略则与 `--y-edge-frac` 一致 | 与 F 相同 |
+| `--add-neighbor-x` | 列 profile 每点为 x−1,x,x+1 三列强度和（gallery / plot-center） | 关 |
 | `--no-clip-ellipse` | 条带不按椭圆再裁剪（整块轴对齐条带矩形参与掩膜/聚合） | 否 |
-| `--show` | 处理完后 **交互弹窗** `plt.show()`（仍会写入 `--out` 下 PNG） | 关 |
+| `--show` | 处理完后 **交互弹窗**（仍会写入 `--out` 下 PNG） | 关 |
 | `--data-dir` | `.npy` 目录 | `PROJECT_ROOT/20260305_1727`（与包内 CLI 一致） |
 | `--out` | PNG 目录 | `outputs/edge_strip_profiles`（`output_paths.OUT_EDGE_STRIP`） |
 
-代码：`ion_detect.edge_strip.outer_y_edge_column_profiles`（参数 `col_metric`，默认 `mean`；亦导出在 `ion_detect` 包根）。
+条带几何与按列聚合：`ion_detect.edge_strip.outer_y_edge_column_profiles`（参数 `col_metric`，默认 `mean`；`outer_y_edge_strip_masks` 亦导出在 `ion_detect` 包根）。
 
-### 3.8 包内模块分工（便于维护与二次开发）
+### 3.8 合并离子中心（`merge_ion_centers.py`）
+
+在 **`detect_ions(..., fix_theta_zero=True)`** 与 **§3.7** 同一套外缘条带几何之间做规则合并，输出带图例的单张 PNG（灰度图、晶格边界椭圆、上下缘分界线、`edge-x-range` 竖线、各中心点）。
+
+**区域规则（与实现一致）**
+
+- 在 **椭圆内**、**上下外缘 y 条带**（与 `outer_y_edge_strip_masks` 一致，由 `--y-edge-frac` 控制）且 **x** 落在 **`--edge-x-range X0 X1`**（默认 `250 750`）内：仅保留该 x 段上的 **条带辅助峰 + 列向 COM**（由 `fitted_xy_for_auxiliary_strip_peaks`）；**丢弃**落在此域内的 `ion_detect` 中心。
+- **其余**（含外缘行但在 x 段之外）：仅保留 `ion_detect`；条带在该 x 段外的峰不参加合并。
+- **`--ion-dist`**（默认 `5`，像素）：对 **detect** 与 **strip_top / strip_bot** 成对、欧氏距离 **≤** 该阈值的，反复合并 **最近** 的一对，**中心取坐标算术平均**，`sigma` / `amplitude` 等仍取自 detect；合并后 `source=fused_mean`（图上为洋红色）。**≤0** 关闭此步。**注意**：阈值若大于约半格距，可能误并相邻两个离子，请按数据微调。
+
+条带侧默认与常用诊断一致：`--y-fit-frac`（默认 `0.35`）、`--strip-center-mode com`、可选用 `--add-neighbor-x`；`--preprocess` 仅作用于送入条带 **按列聚合** 的二维图，`detect_ions` 始终用原图流水线。
+
+```bash
+python merge_ion_centers.py 0
+python merge_ion_centers.py 0 --add-neighbor-x
+python merge_ion_centers.py 0 --edge-x-range 250 750 --y-edge-frac 0.25 ^
+  --y-fit-frac 0.35 --peak-dist 5 --ion-dist 5
+python merge_ion_centers.py ::10 --out outputs/ion_centers_merged
+# 全部选项：python merge_ion_centers.py -h
+```
+
+| 选项 | 含义 | 默认 |
+|------|------|------|
+| 位置参数 `indices` | 与 `python -m ion_detect` 相同 numpy 风格切片并集 | `0` |
+| `--edge-x-range X0 X1` | 上下缘「条带优先」的 x 闭区间；外侧外缘行仍只用 detect | `250 750` |
+| `--y-edge-frac F` | 外缘条带几何 F（同 §3.7 `--y-edge-frac`） | `0.25` |
+| `--y-fit-frac Ff` | 列 y 向 COM 采样条带宽度（同 §3.7） | `0.35` |
+| `--peak-dist D` | 条带 1D 剖面上辅助峰最小间距（像素） | `5` |
+| `--col-metric` | `sum` / `mean` / `max` | `mean` |
+| `--strip-center-mode` | `com` / `com_fit` / `fit` | `com` |
+| `--add-neighbor-x` | 列 profile 用 x−1,x,x+1 三列和 | 关 |
+| `--ion-dist PX` | detect 与 strip 中心距离 ≤ PX 时合并为均值；≤0 关闭 | `5` |
+| `--preprocess` | 送入条带的图：`raw` / `bgsub` / `peel` / `peel_bgsub`（后两者须首轮能检出离子） | `raw` |
+| `--no-clip-ellipse` | 条带不按椭圆裁剪 | 否 |
+| `--no-matched-filter` | `detect_ions` 禁用匹配滤波 | 否 |
+| `--show` | 弹窗显示（仍会写 PNG） | 关 |
+| `--data-dir` / `--out` | `.npy` 目录；PNG 目录 | `20260305_1727`；`outputs/ion_centers_merged` |
+
+核心函数：`merge_centers_hybrid`、`fuse_detect_strip_by_distance`（见脚本内文档字符串）。
+
+### 3.9 y 向分层轮廓（`y_layer_profile.py`）
+
+在图像上固定 **x** 向半开区间（默认列 **`400:601`**，即 400…600），对选定 **y** 行集合在条带内 **按行对 x 求和**，得到 **y 为横轴** 的 1D 曲线，便于观察竖直方向分层/条纹。
+
+- **Boundary**：在 `image −` 高斯背景上与 `detect_ions` / `edge_strip_profile` 相同，调用 `estimate_crystal_boundary`。
+- **`--y-range`**：逗号分隔的多段 numpy 切片并取并集（如 `0:10,20:30`）；**省略或空串** 时使用椭圆在竖直方向的整数行包络 `[⌊cy−b⌋, ⌈cy+b⌉+1)`。
+- **`--preprocess`**：仅 `raw` 或 `bgsub`（无 peel 模式）。
+
+```bash
+python y_layer_profile.py 0
+python y_layer_profile.py 0 --y-range 0:10,20:30
+python y_layer_profile.py 0 --x-range 400:601 --preprocess bgsub
+python y_layer_profile.py 0 --show
+```
+
+| 选项 | 含义 | 默认 |
+|------|------|------|
+| 位置参数 `indices` | 与 `ion_detect` 相同 numpy 风格切片并集 | `0` |
+| `--x-range` | x 向半开切片字符串 | `400:601` |
+| `--y-range` | y 向多段切片并集；空则为椭圆竖直包络 | 空 |
+| `--preprocess` | `raw` / `bgsub` | `raw` |
+| `--show` | 交互显示 | 关 |
+| `--data-dir` / `--out` | 数据目录；PNG 目录 | `20260305_1727`；`outputs/y_layer_profiles` |
+
+### 3.10 包内模块分工（便于维护与二次开发）
 
 | 模块 | 职责 |
 |------|------|
@@ -232,9 +313,11 @@ python edge_strip_profile.py ::20 --out outputs/edge_strip_profiles
 | `ion_detect.fitting` | 单峰/联合双峰拟合与精修 |
 | `ion_detect.peel` | 合并去重、y 向边缘带过滤 |
 | `ion_detect.edge_strip` | y 向外缘条带按列聚合（sum/mean/max）与主峰值（与 peel 同一 F 几何） |
+| `ion_detect.edge_strip_profile_analysis` | 条带列剖面辅助分析（y 向列 profile、高斯/prominence 等） |
+| `ion_detect.edge_strip_profile_viz` | 条带总览图 `plot_edge_strip_dashboard`、逐列交互 `show_peak_column_gallery` |
 | `ion_detect.viz` | `visualize`、`print_summary` |
 | `ion_detect.cli_helpers` | 命令行索引解析 |
-| `output_paths`（根目录模块） | `outputs/` 下 `ion_detect_imgs`、`IonPos`、`amp_y_fit` 等默认路径 |
+| `output_paths`（根目录模块） | `outputs/` 下 `ion_detect_imgs`、`IonPos`、`amp_y_fit`、`edge_strip_profiles`、`y_layer_profiles`、`ion_centers_merged` 等默认路径 |
 
 ---
 
@@ -370,6 +453,10 @@ python .\project_info.py
    使用 `--use-y-thresh-comp` + `--amp-coef-path`
 5. **做构型距离统计**  
    `python .\dist.py --count 100`
+6. **（可选）y 向边缘列剖面或竖直分层**  
+   `python .\edge_strip_profile.py 0` 或 `python .\y_layer_profile.py 0`
+7. **（可选）合并外缘条带与 `ion_detect` 中心并出图**  
+   `python .\merge_ion_centers.py 0 --add-neighbor-x`（见 **§3.8**）
 
 ---
 
@@ -381,19 +468,23 @@ python .\project_info.py
 - **重叠导致漏检（尤其上下缘）**：可试 `--peak-peel`，并配合 `--peak-peel edge` 与略高的 `--peak-peel-rel-threshold` / `--peak-peel-min-amp-frac`，减少中间区域假小峰。
 - **固定 θ 拟合**：离子拉长方向与坐标轴一致时可试 `--fix-theta-zero`；一般旋转 PSF 仍用默认旋转高斯。
 - 形变分析时：优先保证样本数量（`-n` 更大），并对比 `quadratic / quartic / gaussian` 的拟合稳定性与 `R^2`。
+- **合并中心**（`merge_ion_centers.py`）：外缘条带域内漏检时可略减 `--peak-dist`；`--ion-dist` 过大可能误并相邻格点；`--edge-x-range` 需覆盖可靠条带列、又尽量不含左右圆角误判区。
 
 ---
 
 ## 6. 当前项目文件概览
 
 - `output_paths.py`：统一约定 `outputs/` 下各子目录路径，供脚本默认读写
-- `ion_detect/`：检测核心包（`pipeline`、`gaussian`、`boundary`、`preprocess`、`fitting`、`peel`、`viz`、`cli_helpers`；`python -m ion_detect` 入口）
+- `ion_detect/`：检测核心包（`pipeline`、`gaussian`、`boundary`、`preprocess`、`fitting`、`peel`、`edge_strip`、`edge_strip_profile_analysis`、`edge_strip_profile_viz`、`viz`、`cli_helpers`；`python -m ion_detect` 入口）
 - `ion_detection.py`：兼容层，再导出 `detect_ions` / `visualize` / `print_summary`，并支持 `python ion_detection.py ...` 调用 CLI
 - `gallery.py`：交互式可视化浏览
 - `stretching_analysis.py`：y 向统计拟合分析
 - `dist.py`：构型距离统计
 - `vis_selected_npy.py`：指定帧矩阵导出 PNG
-- `edge_strip_profile.py`：y 向外缘条带按列聚合与主峰值/多峰示意（`--preprocess`、`--col-metric`、`--peak-dist` 等，见 **§3.7**）
+- `edge_strip_profile.py`：y 向外缘条带按列聚合与主峰值/多峰示意；分析作图逻辑在 `ion_detect.edge_strip_profile_*`（见 **§3.7**）
+- `merge_ion_centers.py`：`fix-theta-zero` 检测与外缘条带 COM 规则合并、可选 detect–strip 距离融合（见 **§3.8**）
+- `y_layer_profile.py`：固定 x 条带内按行积分，y 向 1D 轮廓（见 **§3.9**）
 - `project_info.py`：数据集统计与概览图
+- `ion_detect/edge_strip_profile_analysis.py`、`ion_detect/edge_strip_profile_viz.py`：条带列剖面分析与可视化（由 `edge_strip_profile.py` 调用）
 - `.gitignore`：忽略数据、缓存与本地环境文件
 
