@@ -5,6 +5,7 @@
 - 在椭圆内、外缘 y 条带几何（与 edge_strip 一致）且 x 落在 [edge_x_lo, edge_x_hi] 的上下两域内，仅采用条带辅助峰 + COM 的中心，丢弃落在该域内的 ion_detect 结果。
 - 其余椭圆内区域仅采用 ion_detect，条带点若落入该区域一般会因几何不可能（条带点在上下条带内）而自然为空集；条带在 x 域外的峰被丢弃。
 - 对 detect 与 strip 的中心，若欧氏距离 ≤ ion-dist（默认 4），替换为二者坐标算术平均（贪心每次合并当前最近的一对）；fit 参数等保留自 detect 项。
+- ``--second-layer-slab`` 最后将 second_layer_L1/L2 与其馀 center 在 ≤ ion-dist 内同样做坐标平均合并（source=fused_second_layer）。
 
 示例：
   python merge_ion_centers.py 0
@@ -33,8 +34,16 @@ from ion_detect.cli_helpers import resolve_indices
 from ion_detect.edge_strip import outer_y_edge_column_profiles
 from ion_detect.edge_strip_profile_analysis import fitted_xy_for_auxiliary_strip_peaks
 from ion_detect.pipeline import detect_ions
+from second_layer_core import (
+    ions_from_second_layer_row,
+    replace_merge_in_xy_slab,
+    second_layer_y0_pair_and_slab_hi_mid23,
+)
 
 _STRIP_SOURCES_FUSE = frozenset({"strip_top", "strip_bot"})
+_SECOND_LAYER_SOURCES = frozenset({"second_layer_L1", "second_layer_L2"})
+# 仅与 second_layer 配对的“另一侧”：原始 detect/strip/fused_mean，不含 fused_second_layer，避免链式重复合并
+_OTHER_FOR_SECOND_LAYER_FUSE = frozenset({"detect", "strip_top", "strip_bot", "fused_mean"})
 
 
 def fuse_detect_strip_by_distance(
@@ -82,6 +91,54 @@ def fuse_detect_strip_by_distance(
         work.append(fused)
         n_fused += 1
     work.sort(key=lambda d: (d["y0"], d["x0"]))
+    return work, n_fused
+
+
+def fuse_second_layer_with_others_by_distance(
+    points: list[dict[str, Any]],
+    ion_dist: float,
+) -> tuple[list[dict[str, Any]], int]:
+    """second_layer_L1/L2 与 detect/strip_top/strip_bot/fused_mean 若距离 ≤ ion_dist，则并成坐标平均。
+
+    每次取距离最小且满足阈值的一对；模板取自非 second_layer 一侧，x0/y0 取均值，source 为
+    ``fused_second_layer``。不与其他 fused_second_layer 配对，避免链式平均。
+    """
+    if ion_dist <= 0.0 or len(points) < 2:
+        return points, 0
+    thr2 = float(ion_dist) ** 2
+    work = list(points)
+    n_fused = 0
+    while True:
+        best_i: int | None = None
+        best_j: int | None = None
+        best_d2 = thr2 * 1.0000001
+        for i in range(len(work)):
+            if work[i].get("source") not in _SECOND_LAYER_SOURCES:
+                continue
+            xi, yi = float(work[i]["x0"]), float(work[i]["y0"])
+            for j in range(len(work)):
+                if i == j:
+                    continue
+                if work[j].get("source") not in _OTHER_FOR_SECOND_LAYER_FUSE:
+                    continue
+                xj, yj = float(work[j]["x0"]), float(work[j]["y0"])
+                d2 = (xi - xj) ** 2 + (yi - yj) ** 2
+                if d2 <= thr2 and d2 < best_d2:
+                    best_d2 = d2
+                    best_i, best_j = i, j
+        if best_i is None or best_j is None or best_j == best_i:
+            break
+        p_sl = work[best_i]
+        p_ot = work[best_j]
+        fused = dict(p_ot)
+        fused["x0"] = 0.5 * (float(p_sl["x0"]) + float(p_ot["x0"]))
+        fused["y0"] = 0.5 * (float(p_sl["y0"]) + float(p_ot["y0"]))
+        fused["source"] = "fused_second_layer"
+        for k in (max(best_i, best_j), min(best_i, best_j)):
+            del work[k]
+        work.append(fused)
+        n_fused += 1
+    work.sort(key=lambda d: (float(d["y0"]), float(d["x0"])))
     return work, n_fused
 
 
@@ -268,6 +325,9 @@ def _plot_merged(
         "strip_top": "tomato",
         "strip_bot": "lime",
         "fused_mean": "mediumorchid",
+        "second_layer_L1": "orange",
+        "second_layer_L2": "deeppink",
+        "fused_second_layer": "gold",
     }
     for ion in merged:
         src = ion.get("source", "detect")
@@ -283,6 +343,7 @@ def _plot_merged(
     ax.set_ylabel("y (px)")
     from matplotlib.lines import Line2D
 
+    sources_present = {ion.get("source", "detect") for ion in merged}
     legend_elems = [
         Line2D([0], [0], marker="o", color="w", markerfacecolor=colors["detect"],
                markersize=8, label="detect (body)", markeredgecolor="k"),
@@ -292,10 +353,29 @@ def _plot_merged(
                markersize=8, label="strip bottom (COM)", markeredgecolor="k"),
         Line2D([0], [0], marker="o", color="w", markerfacecolor=colors["fused_mean"],
                markersize=8, label="fused mean (detect+strip)", markeredgecolor="k"),
-        Line2D([0], [0], color="cyan", linestyle="--", label="boundary ellipse"),
-        Line2D([0], [0], color="darkmagenta", linestyle=":", label="y strip / middle split"),
-        Line2D([0], [0], color="gold", linestyle="--", label="edge x slab"),
     ]
+    if "second_layer_L1" in sources_present:
+        legend_elems.append(
+            Line2D([0], [0], marker="o", color="w", markerfacecolor=colors["second_layer_L1"],
+                   markersize=8, label="second layer (line-id 1)", markeredgecolor="k"),
+        )
+    if "second_layer_L2" in sources_present:
+        legend_elems.append(
+            Line2D([0], [0], marker="o", color="w", markerfacecolor=colors["second_layer_L2"],
+                   markersize=8, label="second layer (line-id 2)", markeredgecolor="k"),
+        )
+    if "fused_second_layer" in sources_present:
+        legend_elems.append(
+            Line2D([0], [0], marker="o", color="w", markerfacecolor=colors["fused_second_layer"],
+                   markersize=8, label="fused mean (second_layer + other)", markeredgecolor="k"),
+        )
+    legend_elems.extend(
+        [
+            Line2D([0], [0], color="cyan", linestyle="--", label="boundary ellipse"),
+            Line2D([0], [0], color="darkmagenta", linestyle=":", label="y strip / middle split"),
+            Line2D([0], [0], color="gold", linestyle="--", label="edge x slab"),
+        ]
+    )
     ax.legend(handles=legend_elems, loc="upper right", fontsize=9)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -392,6 +472,79 @@ def main() -> None:
             "≤0 关闭。注意不要大于约半格距，以免误并相邻离子。"
         ),
     )
+    parser.add_argument(
+        "--second-layer-slab",
+        action="store_true",
+        help=(
+            "在 profile-x-range 与 y≤(第二/第三 y 直方图峰位中心的中点−margin) 的条带内丢弃 merge，"
+            "改用 second_layer（line-first / line-second 两行 COM）；第三峰及更下 y 的 merge 保留"
+        ),
+    )
+    parser.add_argument(
+        "--profile-x-range",
+        type=float,
+        nargs=2,
+        default=None,
+        metavar=("X0", "X1"),
+        help=(
+            "second_layer x 剖面/替换条带范围（像素）；与 second_layer_ion_peaks 默认一致；"
+            "未指定时为 300–600（不再沿用 --edge-x-range 的 250–750）"
+        ),
+    )
+    parser.add_argument(
+        "--second-layer-hist-prominence",
+        type=float,
+        default=5.0,
+        help="合并中心 y 直方图 find_peaks prominence（独立脚本中为 --hist-prominence，默认不同）",
+    )
+    parser.add_argument(
+        "--second-layer-prof-prominence-frac",
+        type=float,
+        default=0.08,
+        help="x 剖面相对峰值 prominence 比例",
+    )
+    parser.add_argument(
+        "--second-layer-prof-peak-distance",
+        type=int,
+        default=4,
+        help="x 向峰最小间距（像素）",
+    )
+    parser.add_argument(
+        "--second-layer-y-halfwin",
+        type=int,
+        default=3,
+        help="列方向 COM 半窗（像素）",
+    )
+    parser.add_argument(
+        "--second-layer-line-first",
+        type=int,
+        default=1,
+        metavar="N",
+        help="y 直方图峰序号（1 起）：第一行（较小 y，靠上）",
+    )
+    parser.add_argument(
+        "--second-layer-line-second",
+        type=int,
+        default=2,
+        metavar="N",
+        help="y 直方图峰序号（1 起）：第二行（剖面 y0）",
+    )
+    parser.add_argument(
+        "--second-layer-line-third",
+        type=int,
+        default=3,
+        metavar="N",
+        help="y 直方图峰序号（1 起）：第三行；与第二行峰位中心的中点作为替换条带下界，第三行 merge 保留在该界之下",
+    )
+    parser.add_argument(
+        "--second-layer-y-cut-pad",
+        type=float,
+        default=1.0,
+        help=(
+            "替换条带 inclusive 上界 = (第二峰与第三峰 bin 中心 y 的中点) − 该值（像素）；"
+            "略大则更保守、更易完整保留第三峰 merge"
+        ),
+    )
     args = parser.parse_args()
 
     data_dir = args.data_dir
@@ -405,9 +558,15 @@ def main() -> None:
     amp_coef_path = OUT_AMP_Y_FIT / "amp_vs_y_coef_10.npy"
     clip_ellipse = not args.no_clip_ellipse
     ex_lo, ex_hi = float(args.edge_x_range[0]), float(args.edge_x_range[1])
+    if args.profile_x_range is None:
+        # 与 second_layer_ion_peaks.py 默认 --edge-x-range 一致（第一/第二行剖面用 300–600）
+        px_lo, px_hi = 300.0, 600.0
+    else:
+        px_lo, px_hi = float(args.profile_x_range[0]), float(args.profile_x_range[1])
+    if px_lo > px_hi:
+        px_lo, px_hi = px_hi, px_lo
 
-    for idx in selected:
-        target = files[idx]
+    def _process_one_frame(idx: int, target: Path) -> tuple[np.ndarray, Any, dict, list[dict[str, Any]], int, dict] | None:
         image = np.load(target)
         ions, boundary = detect_ions(
             image,
@@ -418,7 +577,7 @@ def main() -> None:
         )
         if boundary is None:
             print(f"[{idx:04d}] {target.name}: 无 boundary，跳过")
-            continue
+            return None
 
         ions_peel = ions
         try:
@@ -427,7 +586,7 @@ def main() -> None:
             )
         except ValueError as e:
             print(f"[{idx:04d}] {target.name}: {e}，跳过")
-            continue
+            return None
 
         strip_result = outer_y_edge_column_profiles(
             strip_map,
@@ -453,34 +612,165 @@ def main() -> None:
         )
         merged, n_fused = fuse_detect_strip_by_distance(merged, float(args.ion_dist))
         stats["n_fused_detect_strip"] = n_fused
+        return image, boundary, strip_result, merged, n_fused, stats
 
-        stem = Path(target.name).stem
-        safe = stem.encode("ascii", "replace").decode("ascii")
-        title = (
-            f"frame {idx:04d} ({safe}) merged centers | "
-            f"detect kept {stats['n_detect_kept']}/{stats['n_detect_raw']}, "
-            f"strip +{stats['n_strip_used']}, fused {n_fused} "
-            f"(ion-dist={float(args.ion_dist):g}, x slab {stats['edge_x'][0]:.0f}–{stats['edge_x'][1]:.0f})"
-        )
-        out_png = args.out / f"ion_centers_merged_{idx:04d}.png"
-        print(f"\n[{idx:04d}] {target.name}")
-        print(
-            f"  detect: {stats['n_detect_raw']} raw, "
-            f"{stats['n_detect_kept']} kept, "
-            f"{stats['n_detect_dropped_strip_zone']} dropped in strip-priority zones"
-        )
-        print(
-            f"  strip peaks: top {stats['n_strip_top_raw']}, bot {stats['n_strip_bot_raw']}; "
-            f"used in merge {stats['n_strip_used']}"
-        )
-        print(f"  detect+strip fused (mean within ion-dist): {n_fused}")
-        print(f"  total merged: {len(merged)}")
+    if args.second_layer_slab:
+        lid1 = int(args.second_layer_line_first)
+        lid2 = int(args.second_layer_line_second)
+        lid3 = int(args.second_layer_line_third)
+        if lid1 < 1 or lid2 < 1 or lid3 < 1:
+            raise SystemExit("--second-layer-line-first/second/third 须 >= 1")
+        if len({lid1, lid2, lid3}) < 3:
+            raise SystemExit("second-layer 三个 line-id 须互不相同")
 
-        _plot_merged(
-            image, boundary, strip_result, merged, ex_lo, ex_hi, out_png, title,
-            show=args.show,
+        merged_by_idx: dict[int, list[dict[str, Any]]] = {}
+        meta_by_idx: dict[int, tuple[Any, dict, int, dict]] = {}
+        ys_all: list[float] = []
+
+        for idx in selected:
+            target = files[idx]
+            got = _process_one_frame(idx, target)
+            if got is None:
+                continue
+            image, boundary, strip_result, merged, n_fused, stats = got
+            merged_by_idx[idx] = merged
+            meta_by_idx[idx] = (boundary, strip_result, n_fused, stats)
+            ys_all.extend(float(p["y0"]) for p in merged)
+
+        if not ys_all:
+            raise SystemExit("second-layer-slab: 无合并中心，无法建 y 直方图")
+
+        y_arr = np.asarray(ys_all, dtype=np.float64)
+        y_lo = int(np.floor(y_arr.min()))
+        y_hi = int(np.ceil(y_arr.max()))
+        bin_edges = np.arange(y_lo, y_hi + 2, dtype=float)
+        hp = float(args.second_layer_hist_prominence)
+        mid_margin = float(args.second_layer_y_cut_pad)
+        try:
+            y0_1, y0_2, yc2, yc3, y_mid, y_replace_hi = second_layer_y0_pair_and_slab_hi_mid23(
+                y_arr, bin_edges, hp, lid1, lid2, lid3, mid_margin,
+            )
+        except RuntimeError as e:
+            raise SystemExit(f"second-layer-slab: {e}") from e
+
+        print(
+            f"\nsecond-layer-slab: line-id {lid1}→y0={y0_1}, {lid2}→y0={y0_2} | "
+            f"peak centers y≈{yc2:.2f} (L{lid2}), {yc3:.2f} (L{lid3}) → mid={y_mid:.2f}, "
+            f"replace slab y≤{y_replace_hi:.2f} (mid−{mid_margin:g}) | "
+            f"x [{px_lo:.0f},{px_hi:.0f}] px",
         )
-        print(f"  saved {out_png}")
+
+        halfwin = int(args.second_layer_y_halfwin)
+        ppf = float(args.second_layer_prof_prominence_frac)
+        ppd = int(args.second_layer_prof_peak_distance)
+
+        for idx in selected:
+            if idx not in merged_by_idx:
+                continue
+            target = files[idx]
+            merged = list(merged_by_idx[idx])
+            boundary, strip_result, n_fused, stats = meta_by_idx[idx]
+            image = np.load(target)
+            im = np.asarray(image, dtype=np.float64)
+
+            ions_l1 = ions_from_second_layer_row(
+                im, y0_1, px_lo, px_hi,
+                halfwin=halfwin,
+                prof_prominence_frac=ppf,
+                prof_peak_distance=ppd,
+                source="second_layer_L1",
+            )
+            ions_l2 = ions_from_second_layer_row(
+                im, y0_2, px_lo, px_hi,
+                halfwin=halfwin,
+                prof_prominence_frac=ppf,
+                prof_peak_distance=ppd,
+                source="second_layer_L2",
+            )
+            n_before = len(merged)
+            merged = replace_merge_in_xy_slab(
+                merged, px_lo, px_hi, 0.0, y_replace_hi, ions_l1 + ions_l2,
+            )
+            n_removed_slab = n_before - (len(merged) - len(ions_l1) - len(ions_l2))
+
+            ion_thr = float(args.ion_dist)
+            if ion_thr > 0.0:
+                merged, n_sl_fuse = fuse_second_layer_with_others_by_distance(merged, ion_thr)
+            else:
+                n_sl_fuse = 0
+
+            stem = Path(target.name).stem
+            safe = stem.encode("ascii", "replace").decode("ascii")
+            title = (
+                f"frame {idx:04d} ({safe}) | second-layer slab replace | "
+                f"L1 n={len(ions_l1)}, L2 n={len(ions_l2)}, y≤{y_replace_hi:.1f} "
+                f"(mid L{lid2}/L{lid3}={y_mid:.1f}) | "
+                f"second_layer↔other fused {n_sl_fuse} (ion-dist≤{ion_thr:g}) | "
+                f"detect kept {stats['n_detect_kept']}/{stats['n_detect_raw']}, "
+                f"strip +{stats['n_strip_used']}, fused {n_fused} | "
+                f"total points {len(merged)}"
+            )
+            out_png = args.out / f"ion_centers_merged_{idx:04d}.png"
+            print(f"\n[{idx:04d}] {target.name}")
+            print(
+                f"  detect: {stats['n_detect_raw']} raw, "
+                f"{stats['n_detect_kept']} kept, "
+                f"{stats['n_detect_dropped_strip_zone']} dropped in strip-priority zones",
+            )
+            print(
+                f"  strip peaks: top {stats['n_strip_top_raw']}, bot {stats['n_strip_bot_raw']}; "
+                f"used in merge {stats['n_strip_used']}",
+            )
+            print(f"  detect+strip fused (mean within ion-dist): {n_fused}")
+            print(
+                f"  second-layer: removed {n_removed_slab} merged in slab "
+                f"[x={px_lo:.0f}–{px_hi:.0f}, y=0–{y_replace_hi:.1f}], "
+                f"added L1={len(ions_l1)} L2={len(ions_l2)}",
+            )
+            if ion_thr > 0.0:
+                print(f"  second_layer L1/L2 ↔ other fused (≤ion-dist): {n_sl_fuse}")
+            print(f"  total plotted: {len(merged)}")
+
+            _plot_merged(
+                image, boundary, strip_result, merged, ex_lo, ex_hi, out_png, title,
+                show=args.show,
+            )
+            print(f"  saved {out_png}")
+    else:
+        for idx in selected:
+            target = files[idx]
+            got = _process_one_frame(idx, target)
+            if got is None:
+                continue
+            image, boundary, strip_result, merged, n_fused, stats = got
+
+            stem = Path(target.name).stem
+            safe = stem.encode("ascii", "replace").decode("ascii")
+            title = (
+                f"frame {idx:04d} ({safe}) merged centers | "
+                f"detect kept {stats['n_detect_kept']}/{stats['n_detect_raw']}, "
+                f"strip +{stats['n_strip_used']}, fused {n_fused} "
+                f"(ion-dist={float(args.ion_dist):g}, x slab {stats['edge_x'][0]:.0f}–{stats['edge_x'][1]:.0f})"
+            )
+            out_png = args.out / f"ion_centers_merged_{idx:04d}.png"
+            print(f"\n[{idx:04d}] {target.name}")
+            print(
+                f"  detect: {stats['n_detect_raw']} raw, "
+                f"{stats['n_detect_kept']} kept, "
+                f"{stats['n_detect_dropped_strip_zone']} dropped in strip-priority zones",
+            )
+            print(
+                f"  strip peaks: top {stats['n_strip_top_raw']}, bot {stats['n_strip_bot_raw']}; "
+                f"used in merge {stats['n_strip_used']}",
+            )
+            print(f"  detect+strip fused (mean within ion-dist): {n_fused}")
+            print(f"  total merged: {len(merged)}")
+
+            _plot_merged(
+                image, boundary, strip_result, merged, ex_lo, ex_hi, out_png, title,
+                show=args.show,
+            )
+            print(f"  saved {out_png}")
 
 
 if __name__ == "__main__":
