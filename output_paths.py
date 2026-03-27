@@ -15,3 +15,4 @@ OUT_RESIDUAL_IMGS = OUTPUTS_ROOT / "residual_imgs"  # peak-peel 残差图
 OUT_EDGE_STRIP = OUTPUTS_ROOT / "edge_strip_profiles"  # edge_strip_profile.py 列轮廓 PNG
 OUT_Y_LAYER_PROFILE = OUTPUTS_ROOT / "y_layer_profiles"  # y_layer_profile.py 沿 x 条带行积分
 OUT_ION_CENTERS_MERGED = OUTPUTS_ROOT / "ion_centers_merged"  # merge_ion_centers.py 合并中心 PNG
+OUT_CUSTOM_STRIP_CENTERS = OUTPUTS_ROOT / "custom_strip_centers"  # custom_strip_centers.py 矩形条带中心 PNG
