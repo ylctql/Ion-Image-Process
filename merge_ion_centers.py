@@ -2,9 +2,11 @@
 合并 ion_detect（中心区域）与外缘条带列向质心（上下边缘、中间 x 范围）。
 
 规则简述：
-- 在椭圆内、外缘 y 条带几何（与 edge_strip 一致）且 x 落在 [edge_x_lo, edge_x_hi] 的上下两域内，仅采用条带辅助峰 + COM 的中心，丢弃落在该域内的 ion_detect 结果。
-- 其余椭圆内区域仅采用 ion_detect，条带点若落入该区域一般会因几何不可能（条带点在上下条带内）而自然为空集；条带在 x 域外的峰被丢弃。
-- 对 detect 与 strip 的中心，若欧氏距离 ≤ ion-dist（默认 5），替换为二者坐标算术平均（贪心每次合并当前最近的一对）；fit 参数等保留自 detect 项。
+- 对落在「条带优先」上下域内、且与某 strip 中心距离 ≤ peak-dist 的 detect 与 strip 成对：在 strip_map 上对二者种子做联合双峰拟合（与 ion_detect 同风格的轴对齐双高斯）。
+  若拟合成功且两峰间距 < ion-dist，则输出一点（坐标为两拟合峰均值，source=fused_bimodal，参量继承 detect）；
+  若拟合成功且间距 ≥ ion-dist，则保留两拟合峰（source=fused_split）。拟合失败则退回种子坐标算术均值（source=fused_bimodal_fallback）。
+- 条带优先域内、未与 strip 配对的 detect 仍丢弃（由 strip/COM 代表该域）；未配对的 strip 与其它位置的 detect 照常保留。
+- 其余椭圆内区域仅采用 ion_detect；条带在 x 域外的峰仍丢弃。
 
 示例：
   python merge_ion_centers.py 0
@@ -32,57 +34,76 @@ from output_paths import OUT_AMP_Y_FIT, OUT_ION_CENTERS_MERGED, PROJECT_ROOT
 from ion_detect.cli_helpers import resolve_indices
 from ion_detect.edge_strip import outer_y_edge_column_profiles
 from ion_detect.edge_strip_profile_analysis import fitted_xy_for_auxiliary_strip_peaks
+from ion_detect.fitting import fit_joint_two_peaks_at
 from ion_detect.pipeline import detect_ions
 
-_STRIP_SOURCES_FUSE = frozenset({"strip_top", "strip_bot"})
+# 与 detect_ions 默认一致，用于条带域内 detect–strip 联合双峰拟合
+_DEFAULT_FIT_HW: tuple[int, int] = (4, 3)
+_DEFAULT_SIGMA_FIT_RANGE: tuple[float, float] = (0.3, 3.5)
+_BIMODAL_SIGMA_INIT: tuple[float, float] = (1.2, 1.8)
 
 
-def fuse_detect_strip_by_distance(
-    points: list[dict[str, Any]],
-    ion_dist: float,
-) -> tuple[list[dict[str, Any]], int]:
-    """将 source==detect 与 strip_top/strip_bot 且距离 ≤ ion_dist 的点对合并为坐标均值。
-
-    每次在全部合法点对中取距离最小的一对合并，直至无满足阈值的点对。
-    合并后的条目 source 为 ``fused_mean``，x0/y0 为二者平均，其余键自 detect 拷贝。
-    """
-    if ion_dist <= 0.0 or len(points) < 2:
-        return points, 0
-    thr2 = float(ion_dist) ** 2
-    work = list(points)
-    n_fused = 0
+def _greedy_pair_detect_strip(
+    n_det: int,
+    n_strip: int,
+    det_pts: list[dict[str, Any]],
+    strip_pts: list[dict[str, Any]],
+    peak_dist: float,
+) -> list[tuple[int, int]]:
+    """在 detect 与 strip 之间贪心配对：每次取距离最小且 ≤ peak_dist 的一对，每点最多参与一次。"""
+    if peak_dist <= 0.0 or n_det == 0 or n_strip == 0:
+        return []
+    thr2 = float(peak_dist) ** 2
+    used_d: set[int] = set()
+    used_s: set[int] = set()
+    pairs: list[tuple[int, int]] = []
     while True:
-        best_i: int | None = None
-        best_j: int | None = None
-        best_d2 = thr2 * 1.0000001  # 仅接受 d2 <= thr2
-        for i in range(len(work)):
-            if work[i].get("source") != "detect":
+        best_d2 = thr2 * 1.0000001
+        best_ij: tuple[int, int] | None = None
+        for di in range(n_det):
+            if di in used_d:
                 continue
-            xi, yi = float(work[i]["x0"]), float(work[i]["y0"])
-            for j in range(len(work)):
-                if i == j:
+            xd, yd = float(det_pts[di]["x0"]), float(det_pts[di]["y0"])
+            for sj in range(n_strip):
+                if sj in used_s:
                     continue
-                if work[j].get("source") not in _STRIP_SOURCES_FUSE:
-                    continue
-                xj, yj = float(work[j]["x0"]), float(work[j]["y0"])
-                d2 = (xi - xj) ** 2 + (yi - yj) ** 2
+                xs, ys = float(strip_pts[sj]["x0"]), float(strip_pts[sj]["y0"])
+                d2 = (xd - xs) ** 2 + (yd - ys) ** 2
                 if d2 <= thr2 and d2 < best_d2:
                     best_d2 = d2
-                    best_i, best_j = i, j
-        if best_i is None or best_j is None or best_j == best_i:
+                    best_ij = (di, sj)
+        if best_ij is None:
             break
-        d_det = work[best_i]
-        d_strip = work[best_j]
-        fused = dict(d_det)
-        fused["x0"] = 0.5 * (float(d_det["x0"]) + float(d_strip["x0"]))
-        fused["y0"] = 0.5 * (float(d_det["y0"]) + float(d_strip["y0"]))
-        fused["source"] = "fused_mean"
-        for k in (max(best_i, best_j), min(best_i, best_j)):
-            del work[k]
-        work.append(fused)
-        n_fused += 1
-    work.sort(key=lambda d: (d["y0"], d["x0"]))
-    return work, n_fused
+        di, sj = best_ij
+        used_d.add(di)
+        used_s.add(sj)
+        pairs.append((di, sj))
+    return pairs
+
+
+def _split_entry_from_fit(
+    fit_rec: dict[str, Any],
+    det_ion: dict[str, Any],
+    strip_rec: dict[str, Any],
+    py_d: int,
+    px_d: int,
+) -> dict[str, Any]:
+    """双峰保留时：按拟合条目的整数种子归属 detect 或 strip 模板。"""
+    if int(fit_rec["_py"]) == py_d and int(fit_rec["_px"]) == px_d:
+        out = dict(det_ion)
+    else:
+        out = {"source": strip_rec["source"]}
+    out["x0"] = float(fit_rec["x0"])
+    out["y0"] = float(fit_rec["y0"])
+    out["sigma_minor"] = float(fit_rec["sigma_minor"])
+    out["sigma_major"] = float(fit_rec["sigma_major"])
+    out["theta_deg"] = float(fit_rec["theta_deg"])
+    out["amplitude"] = float(fit_rec["amplitude"])
+    out["source"] = "fused_split"
+    if "_sigma_x" in fit_rec:
+        out["_sigma_x"] = fit_rec["_sigma_x"]
+        out["_sigma_y"] = fit_rec["_sigma_y"]
+    return out
 
 
 def _inside_ellipse(
@@ -175,10 +196,13 @@ def merge_centers_hybrid(
     edge_x_lo: float,
     edge_x_hi: float,
     peak_dist: float,
+    ion_dist: float,
     clip_ellipse: bool,
     y_fit_frac: float | None,
     add_neighbor_x: bool,
     strip_center_mode: str = "com",
+    fit_hw: tuple[int, int] | None = None,
+    sigma_fit_range: tuple[float, float] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """返回合并后的点列表（每项含 x0,y0,source）及统计信息 dict。"""
     meta = strip_result["meta"]
@@ -205,28 +229,123 @@ def merge_centers_hybrid(
         if ex0 <= x <= ex1 and _inside_ellipse(x, y, boundary):
             strip_points.append({"x0": x, "y0": y, "source": "strip_bot"})
 
-    detect_kept: list[dict[str, Any]] = []
-    detect_dropped = 0
+    detect_in_slab: list[dict[str, Any]] = []
+    detect_elsewhere: list[dict[str, Any]] = []
     for ion in ions:
         x0 = float(ion["x0"])
         y0 = float(ion["y0"])
-        if _in_strip_priority_slab(x0, y0, boundary, meta, ex0, ex1):
-            detect_dropped += 1
-            continue
         d = dict(ion)
         d["source"] = "detect"
-        detect_kept.append(d)
+        if _in_strip_priority_slab(x0, y0, boundary, meta, ex0, ex1):
+            detect_in_slab.append(d)
+        else:
+            detect_elsewhere.append(d)
 
-    merged = detect_kept + strip_points
+    hw = fit_hw if fit_hw is not None else _DEFAULT_FIT_HW
+    hw_y, hw_x = int(hw[0]), int(hw[1])
+    s_lo, s_hi = (
+        sigma_fit_range
+        if sigma_fit_range is not None
+        else _DEFAULT_SIGMA_FIT_RANGE
+    )
+    fit_img = np.asarray(strip_map, dtype=np.float64)
+    h, w = fit_img.shape
+    ion_thr = float(ion_dist)
+
+    pairs = _greedy_pair_detect_strip(
+        len(detect_in_slab),
+        len(strip_points),
+        detect_in_slab,
+        strip_points,
+        peak_dist,
+    )
+
+    used_slab: set[int] = set()
+    used_strip: set[int] = set()
+    merged_from_pairs: list[dict[str, Any]] = []
+    n_fused_bimodal = 0
+    n_fused_split = 0
+    n_pair_fit_failed = 0
+
+    for di, sj in pairs:
+        used_slab.add(di)
+        used_strip.add(sj)
+        det_d = detect_in_slab[di]
+        stp = strip_points[sj]
+        py_d = int(np.clip(round(float(det_d["y0"])), 0, h - 1))
+        px_d = int(np.clip(round(float(det_d["x0"])), 0, w - 1))
+        py_s = int(np.clip(round(float(stp["y0"])), 0, h - 1))
+        px_s = int(np.clip(round(float(stp["x0"])), 0, w - 1))
+
+        twop = fit_joint_two_peaks_at(
+            fit_img,
+            py_d,
+            px_d,
+            py_s,
+            px_s,
+            hw_y,
+            hw_x,
+            float(s_lo),
+            float(s_hi),
+            h,
+            w,
+            _BIMODAL_SIGMA_INIT,
+        )
+
+        if twop is None or len(twop) != 2:
+            n_pair_fit_failed += 1
+            fb = dict(det_d)
+            fb["x0"] = 0.5 * (float(det_d["x0"]) + float(stp["x0"]))
+            fb["y0"] = 0.5 * (float(det_d["y0"]) + float(stp["y0"]))
+            fb["source"] = "fused_bimodal_fallback"
+            merged_from_pairs.append(fb)
+            n_fused_bimodal += 1
+            continue
+
+        x_a, y_a = float(twop[0]["x0"]), float(twop[0]["y0"])
+        x_b, y_b = float(twop[1]["x0"]), float(twop[1]["y0"])
+        sep = float(np.hypot(x_a - x_b, y_a - y_b))
+
+        if ion_thr > 0.0 and sep < ion_thr:
+            out = dict(det_d)
+            out["x0"] = 0.5 * (x_a + x_b)
+            out["y0"] = 0.5 * (y_a + y_b)
+            out["source"] = "fused_bimodal"
+            merged_from_pairs.append(out)
+            n_fused_bimodal += 1
+        else:
+            for fk in twop:
+                merged_from_pairs.append(
+                    _split_entry_from_fit(fk, det_d, stp, py_d, px_d)
+                )
+            n_fused_split += 2
+
+    detect_dropped = 0
+    for i in range(len(detect_in_slab)):
+        if i not in used_slab:
+            detect_dropped += 1
+
+    strip_kept: list[dict[str, Any]] = [
+        dict(strip_points[j])
+        for j in range(len(strip_points))
+        if j not in used_strip
+    ]
+
+    merged = detect_elsewhere + strip_kept + merged_from_pairs
     merged.sort(key=lambda d: (d["y0"], d["x0"]))
     stats = {
         "n_detect_raw": len(ions),
-        "n_detect_kept": len(detect_kept),
+        "n_detect_kept": len(detect_elsewhere),
         "n_detect_dropped_strip_zone": detect_dropped,
+        "n_detect_slab_paired": len(used_slab),
         "n_strip_top_raw": len(top_xy),
         "n_strip_bot_raw": len(bot_xy),
         "n_strip_used": len(strip_points),
         "edge_x": (ex0, ex1),
+        "n_pair_detect_strip": len(pairs),
+        "n_fused_bimodal": n_fused_bimodal,
+        "n_fused_split_peaks": n_fused_split,
+        "n_pair_fit_failed": n_pair_fit_failed,
     }
     return merged, stats
 
@@ -268,6 +387,9 @@ def _plot_merged(
         "strip_top": "tomato",
         "strip_bot": "lime",
         "fused_mean": "mediumorchid",
+        "fused_bimodal": "mediumorchid",
+        "fused_bimodal_fallback": "violet",
+        "fused_split": "gold",
     }
     for ion in merged:
         src = ion.get("source", "detect")
@@ -290,8 +412,12 @@ def _plot_merged(
                markersize=8, label="strip top (COM)", markeredgecolor="k"),
         Line2D([0], [0], marker="o", color="w", markerfacecolor=colors["strip_bot"],
                markersize=8, label="strip bottom (COM)", markeredgecolor="k"),
-        Line2D([0], [0], marker="o", color="w", markerfacecolor=colors["fused_mean"],
-               markersize=8, label="fused mean (detect+strip)", markeredgecolor="k"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor=colors["fused_bimodal"],
+               markersize=8, label="fused bimodal (1 peak)", markeredgecolor="k"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor=colors["fused_split"],
+               markersize=8, label="fused split (2 peaks)", markeredgecolor="k"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor=colors["fused_bimodal_fallback"],
+               markersize=8, label="bimodal fit fallback", markeredgecolor="k"),
         Line2D([0], [0], color="cyan", linestyle="--", label="boundary ellipse"),
         Line2D([0], [0], color="darkmagenta", linestyle=":", label="y strip / middle split"),
         Line2D([0], [0], color="gold", linestyle="--", label="edge x slab"),
@@ -342,7 +468,7 @@ def main() -> None:
         "--peak-dist",
         type=float,
         default=5.0,
-        help="条带 1D 轮廓上辅助峰最小间距（像素）",
+        help="条带 1D 轮廓上辅助峰最小间距（像素）；亦用于与条带域内 detect 配对做联合双峰拟合",
     )
     parser.add_argument(
         "--col-metric",
@@ -388,8 +514,8 @@ def main() -> None:
         default=5.0,
         metavar="PX",
         help=(
-            "detect 与 strip_top/strip_bot 中心距离 ≤ 该值（像素）时合并为坐标均值；"
-            "≤0 关闭。注意不要大于约半格距，以免误并相邻离子。"
+            "条带域内 detect–strip 经联合双峰拟合后，若两拟合峰间距 < 该值（像素）则并成一点（均值）；"
+            "否则保留两拟合峰。≤0 时拟合成功则总保留双峰。勿大于约半格距以免误并相邻离子。"
         ),
     )
     args = parser.parse_args()
@@ -446,34 +572,41 @@ def main() -> None:
             edge_x_lo=ex_lo,
             edge_x_hi=ex_hi,
             peak_dist=float(args.peak_dist),
+            ion_dist=float(args.ion_dist),
             clip_ellipse=clip_ellipse,
             y_fit_frac=y_fit,
             add_neighbor_x=args.add_neighbor_x,
             strip_center_mode=args.strip_center_mode,
         )
-        merged, n_fused = fuse_detect_strip_by_distance(merged, float(args.ion_dist))
-        stats["n_fused_detect_strip"] = n_fused
 
         stem = Path(target.name).stem
         safe = stem.encode("ascii", "replace").decode("ascii")
         title = (
             f"frame {idx:04d} ({safe}) merged centers | "
             f"detect kept {stats['n_detect_kept']}/{stats['n_detect_raw']}, "
-            f"strip +{stats['n_strip_used']}, fused {n_fused} "
-            f"(ion-dist={float(args.ion_dist):g}, x slab {stats['edge_x'][0]:.0f}–{stats['edge_x'][1]:.0f})"
+            f"strip +{stats['n_strip_used']}, pairs {stats['n_pair_detect_strip']} "
+            f"(1-peak {stats['n_fused_bimodal']}, 2-peak {stats['n_fused_split_peaks']}, "
+            f"fit-fail {stats['n_pair_fit_failed']}; ion-dist={float(args.ion_dist):g}, "
+            f"peak-dist={float(args.peak_dist):g}, x slab {stats['edge_x'][0]:.0f}–{stats['edge_x'][1]:.0f})"
         )
         out_png = args.out / f"ion_centers_merged_{idx:04d}.png"
         print(f"\n[{idx:04d}] {target.name}")
         print(
             f"  detect: {stats['n_detect_raw']} raw, "
-            f"{stats['n_detect_kept']} kept, "
-            f"{stats['n_detect_dropped_strip_zone']} dropped in strip-priority zones"
+            f"{stats['n_detect_kept']} kept (body), "
+            f"{stats['n_detect_dropped_strip_zone']} dropped (strip zone, no partner), "
+            f"{stats['n_detect_slab_paired']} paired for bimodal"
         )
         print(
             f"  strip peaks: top {stats['n_strip_top_raw']}, bot {stats['n_strip_bot_raw']}; "
             f"used in merge {stats['n_strip_used']}"
         )
-        print(f"  detect+strip fused (mean within ion-dist): {n_fused}")
+        print(
+            f"  detect+strip pairs: {stats['n_pair_detect_strip']}; "
+            f"1-peak out {stats['n_fused_bimodal']}, "
+            f"2-peak out {stats['n_fused_split_peaks']}, "
+            f"fit fail {stats['n_pair_fit_failed']}"
+        )
         print(f"  total merged: {len(merged)}")
 
         _plot_merged(

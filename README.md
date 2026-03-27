@@ -104,8 +104,9 @@ python -m ion_detect 0 5 -1 "::3,0:10"
 | `--peak-peel-min-amp-frac` | 未传 | 不设则二轮不按振幅比例过滤 |
 | `--save-residual-img` | 关闭 | 须同时 `--peak-peel` |
 | `--residual-img-dir` | `outputs/residual_imgs` | 未传时使用 |
+| `--show` | 关闭 | 每帧保存 PNG 后阻塞弹窗显示主图；若 `--peak-peel --save-residual-img` 且生成了残差图亦弹窗 |
 
-**未单独暴露给 CLI、但 `detect_ions` 使用的默认**（见 `ion_detect/pipeline.py`）：`rel_threshold=0.025`，`bg_sigma=(10, 30)`，`peak_size=(5, 9)`，`fit_hw=(3, 4)`（半窗口），`sigma_range=(0.3, 3.5)`，`refine=True`，峰值剥离时 `peak_peel_margin_sigma=4.5`。需在代码中调用 `detect_ions(...)` 才能改这些量。
+**未单独暴露给 CLI、但 `detect_ions` 使用的默认**（见 `ion_detect/pipeline.py`）：`rel_threshold=0.025`，`bg_sigma=(10, 30)`，`peak_size=(5, 9)`，`fit_hw=(4, 3)`（半窗口 `(hw_y, hw_x)`，离子沿 y 延展时略增大竖向窗），`sigma_range=(0.3, 3.5)`，`refine=True`，峰值剥离时 `peak_peel_margin_sigma=4.5`。需在代码中调用 `detect_ions(...)` 才能改这些量。
 
 ### 3.2 保存离子中心
 
@@ -244,9 +245,9 @@ python edge_strip_profile.py ::20 --out outputs/edge_strip_profiles
 
 **区域规则（与实现一致）**
 
-- 在 **椭圆内**、**上下外缘 y 条带**（与 `outer_y_edge_strip_masks` 一致，由 `--y-edge-frac` 控制）且 **x** 落在 **`--edge-x-range X0 X1`**（默认 `250 750`）内：仅保留该 x 段上的 **条带辅助峰 + 列向 COM**（由 `fitted_xy_for_auxiliary_strip_peaks`）；**丢弃**落在此域内的 `ion_detect` 中心。
+- 在 **椭圆内**、**上下外缘 y 条带** 且 **x** 落在 **`--edge-x-range`** 内：收集条带点（`fitted_xy_for_auxiliary_strip_peaks`）与落在此域内的 `ion_detect` 中心。对 **欧氏距离 ≤ `--peak-dist`** 的 detect–strip 对（贪心每次最近的一对）在 **`--preprocess` 送入条带的同一张 2D 图**（`strip_map`）上做 **联合双峰拟合**（轴对齐双高斯，与 `ion_detect.fitting.fit_joint_two_peaks_at` 同型）：若 **两拟合峰间距 < `--ion-dist`** 则输出 **一点**（坐标为两峰均值，`source=fused_bimodal`）；若 **间距 ≥ `ion-dist`** 则 **保留两拟合峰**（`source=fused_split`）；拟合失败则退化为 **种子坐标均值**（`source=fused_bimodal_fallback`）。未与 strip 配对的该域内 detect **仍丢弃**（由条带侧代表）。
 - **其余**（含外缘行但在 x 段之外）：仅保留 `ion_detect`；条带在该 x 段外的峰不参加合并。
-- **`--ion-dist`**（默认 `5`，像素）：对 **detect** 与 **strip_top / strip_bot** 成对、欧氏距离 **≤** 该阈值的，反复合并 **最近** 的一对，**中心取坐标算术平均**，`sigma` / `amplitude` 等仍取自 detect；合并后 `source=fused_mean`（图上为洋红色）。**≤0** 关闭此步。**注意**：阈值若大于约半格距，可能误并相邻两个离子，请按数据微调。
+- **`--ion-dist`**：仅作用于上述 **拟合后** 是否并成一点的判据；**≤0** 时拟合成功则 **总保留双峰**。**注意**：勿大于约半格距，以免误并相邻离子。
 
 条带侧默认与常用诊断一致：`--y-fit-frac`（默认 `0.35`）、`--strip-center-mode com`、可选用 `--add-neighbor-x`；`--preprocess` 仅作用于送入条带 **按列聚合** 的二维图，`detect_ions` 始终用原图流水线。
 
@@ -265,18 +266,18 @@ python merge_ion_centers.py ::10 --out outputs/ion_centers_merged
 | `--edge-x-range X0 X1` | 上下缘「条带优先」的 x 闭区间；外侧外缘行仍只用 detect | `250 750` |
 | `--y-edge-frac F` | 外缘条带几何 F（同 §3.7 `--y-edge-frac`） | `0.25` |
 | `--y-fit-frac Ff` | 列 y 向 COM 采样条带宽度（同 §3.7） | `0.35` |
-| `--peak-dist D` | 条带 1D 剖面上辅助峰最小间距（像素） | `5` |
+| `--peak-dist D` | 条带 1D 剖面上辅助峰最小间距；并参与条带域内 detect–strip 配对 | `5` |
 | `--col-metric` | `sum` / `mean` / `max` | `mean` |
 | `--strip-center-mode` | `com` / `com_fit` / `fit` | `com` |
 | `--add-neighbor-x` | 列 profile 用 x−1,x,x+1 三列和 | 关 |
-| `--ion-dist PX` | detect 与 strip 中心距离 ≤ PX 时合并为均值；≤0 关闭 | `5` |
+| `--ion-dist PX` | 联合双峰拟合后，两峰间距 < PX 则并成一点；≤0 则保留双峰 | `5` |
 | `--preprocess` | 送入条带的图：`raw` / `bgsub` / `peel` / `peel_bgsub`（后两者须首轮能检出离子） | `raw` |
 | `--no-clip-ellipse` | 条带不按椭圆裁剪 | 否 |
 | `--no-matched-filter` | `detect_ions` 禁用匹配滤波 | 否 |
 | `--show` | 弹窗显示（仍会写 PNG） | 关 |
 | `--data-dir` / `--out` | `.npy` 目录；PNG 目录 | `20260305_1727`；`outputs/ion_centers_merged` |
 
-核心函数：`merge_centers_hybrid`、`fuse_detect_strip_by_distance`（见脚本内文档字符串）。
+核心函数：`merge_centers_hybrid`（内部调用 `ion_detect.fitting.fit_joint_two_peaks_at`；见脚本内文档字符串）。
 
 ### 3.9 y 向分层轮廓（`y_layer_profile.py`）
 

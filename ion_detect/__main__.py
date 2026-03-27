@@ -5,6 +5,9 @@ import numpy as np
 import time
 from pathlib import Path
 
+import matplotlib
+import matplotlib.pyplot as plt
+
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
@@ -21,6 +24,17 @@ from .viz import print_summary, visualize, visualize_peel_residual
 
 
 _PEEL_UNSET = object()  # --peak-peel 未传入
+
+
+def _warn_noninteractive_backend() -> None:
+    be = matplotlib.get_backend().lower()
+    if be == "agg" or "inline" in be:
+        print(
+            "[提示] 当前 Matplotlib 后端为 "
+            f"{matplotlib.get_backend()}（无可交互窗口或内联静态图）。"
+            "若需弹窗查看，请在系统终端设置 GUI 后端，例如 PowerShell: "
+            "$env:MPLBACKEND='TkAgg'; python -m ion_detect 0 --show"
+        )
 
 
 def main():
@@ -150,6 +164,14 @@ def main():
         default=None,
         help="残差图保存目录，默认 outputs/residual_imgs。",
     )
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        help=(
+            "处理每帧后弹出交互窗口显示主结果图（仍会写入输出目录 PNG）；"
+            "若使用 --peak-peel --save-residual-img，残差图亦弹窗。"
+        ),
+    )
     args = parser.parse_args()
 
     if args.peak_peel is _PEEL_UNSET:
@@ -179,6 +201,10 @@ def main():
     if args.save_residual_img and not peak_peel:
         print("警告: --save-residual-img 已忽略 (需同时使用 --peak-peel)。")
     want_residual = bool(args.save_residual_img and peak_peel)
+
+    if args.show:
+        plt.ioff()
+        _warn_noninteractive_backend()
 
     detect_kw = dict(
         use_y_threshold_comp=args.use_y_thresh_comp,
@@ -230,10 +256,15 @@ def main():
             print(f"[已保存离子中心] {pos_path}")
 
         out_path = out_dir / f"ion_ellipses_{idx:04d}.png"
-        visualize(image, ions, n_sigma=2.0,
-                  title=f"[{idx:04d}] {target.name}",
-                  output_path=out_path,
-                  show_zoom=True, boundary=boundary)
+        visualize(
+            image,
+            ions,
+            n_sigma=2.0,
+            title=f"[{idx:04d}] {target.name}",
+            output_path=out_path,
+            boundary=boundary,
+            show=args.show,
+        )
 
         if want_residual:
             if peel_residual is None:
@@ -249,6 +280,7 @@ def main():
                     reference_image=image,
                     peak_peel_y_edges_only=peak_peel_y_edges_only,
                     peak_peel_y_edge_frac=args.peak_peel_y_edge_frac,
+                    show=args.show,
                 )
 
 

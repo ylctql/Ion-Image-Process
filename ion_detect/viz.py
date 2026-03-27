@@ -6,38 +6,56 @@ from matplotlib.patches import Ellipse
 from .peel import y_edge_band_thresholds
 
 
-def visualize(image, ions, n_sigma=2.0, title="", output_path=None,
-              show_zoom=True, zoom_center=None, zoom_size=80,
-              boundary=None):
+def visualize(
+    image,
+    ions,
+    n_sigma=2.0,
+    title="",
+    output_path=None,
+    boundary=None,
+    *,
+    show=False,
+):
     """
-    在图像上标注拟合椭圆。
+    在整幅图像上标注拟合椭圆与离子中心（实心点）。
 
     n_sigma 控制椭圆的半轴长度 (n_sigma * sigma)。
     boundary: (cx, cy, a, b) 晶格边界椭圆参数, 若提供则绘制在图上。
-    可选显示一个局部放大区域。
-    zoom_center / zoom_size 保留为兼容参数, 当前未使用 (放大区域为内置固定列表)。
+    show: 为 True 时在保存（若给定 output_path）后 ``plt.show(block=True)`` 弹出交互窗口。
     """
-    _ = (zoom_center, zoom_size)
-    nrows = 6 if show_zoom else 1
-    fig, axes = plt.subplots(nrows, 1,
-                             figsize=(20, 5 + (3 * 5 if show_zoom else 0)),
-                             gridspec_kw={"height_ratios": [5, 2, 3, 3, 3, 2]
-                                          if show_zoom else [1]})
-    if not show_zoom:
-        axes = [axes]
-
-    ax = axes[0]
-    ax.imshow(image, cmap="gray", aspect="auto", vmin=np.percentile(image, 1),
-              vmax=np.percentile(image, 99.5))
+    fig, ax = plt.subplots(1, 1, figsize=(16, 9))
+    ax.imshow(
+        image,
+        cmap="gray",
+        aspect="equal",
+        vmin=np.percentile(image, 1),
+        vmax=np.percentile(image, 99.5),
+    )
     for ion in ions:
         ell = Ellipse(
             xy=(ion["x0"], ion["y0"]),
             width=2 * n_sigma * ion["sigma_minor"],
             height=2 * n_sigma * ion["sigma_major"],
             angle=ion["theta_deg"],
-            edgecolor="red", facecolor="none", linewidth=0.4, alpha=0.8,
+            edgecolor="red",
+            facecolor="none",
+            linewidth=0.4,
+            alpha=0.8,
         )
         ax.add_patch(ell)
+    if ions:
+        xs = [float(ion["x0"]) for ion in ions]
+        ys = [float(ion["y0"]) for ion in ions]
+        ax.scatter(
+            xs,
+            ys,
+            s=12.0,
+            marker="o",
+            c="gold",
+            edgecolors="black",
+            linewidths=0.35,
+            zorder=6,
+        )
     if boundary is not None:
         bcx, bcy, ba, bb = boundary
         bnd_ell = Ellipse(
@@ -53,56 +71,12 @@ def visualize(image, ions, n_sigma=2.0, title="", output_path=None,
     ax.set_xlabel("x (pixel)")
     ax.set_ylabel("y (pixel)")
 
-    if show_zoom:
-        regions = [
-            ("Top edge",    (500, 35),  100, 20),
-            ("Left",        (200, 75),   60, 30),
-            ("Center",      (500, 85),   60, 30),
-            ("Right",       (800, 75),   60, 30),
-            ("Bottom edge", (500, 130), 100, 20),
-        ]
-        for i, (label, (rcx, rcy), rzs_x, rzs_y) in enumerate(regions):
-            ax2 = axes[1 + i]
-            x1z = max(0, rcx - rzs_x)
-            x2z = min(image.shape[1], rcx + rzs_x)
-            y1z = max(0, rcy - rzs_y)
-            y2z = min(image.shape[0], rcy + rzs_y)
-
-            ax2.imshow(image, cmap="gray", aspect="equal",
-                       vmin=np.percentile(image, 1),
-                       vmax=np.percentile(image, 99.5))
-            for ion in ions:
-                if x1z <= ion["x0"] <= x2z and y1z <= ion["y0"] <= y2z:
-                    ell = Ellipse(
-                        xy=(ion["x0"], ion["y0"]),
-                        width=2 * n_sigma * ion["sigma_minor"],
-                        height=2 * n_sigma * ion["sigma_major"],
-                        angle=ion["theta_deg"],
-                        edgecolor="lime", facecolor="none", linewidth=1.2,
-                    )
-                    ax2.add_patch(ell)
-                    ax2.plot(ion["x0"], ion["y0"], "r.", markersize=2)
-            if boundary is not None:
-                bcx, bcy, ba, bb = boundary
-                bnd_ell = Ellipse(
-                    xy=(bcx, bcy), width=2 * ba, height=2 * bb, angle=0,
-                    edgecolor="cyan", facecolor="none",
-                    linewidth=1.5, linestyle="--", alpha=0.9,
-                )
-                ax2.add_patch(bnd_ell)
-            ax2.set_xlim(x1z, x2z)
-            ax2.set_ylim(y2z, y1z)
-            ax2.set_title(
-                f"Zoom: {label}  x=[{x1z},{x2z}]  y=[{y1z},{y2z}]",
-                fontsize=11,
-            )
-            ax2.set_xlabel("x (pixel)")
-            ax2.set_ylabel("y (pixel)")
-
     fig.tight_layout()
     if output_path:
         fig.savefig(output_path, dpi=200)
         print(f"[已保存] {output_path}")
+    if show:
+        plt.show(block=True)
     plt.close(fig)
 
 
@@ -114,6 +88,8 @@ def visualize_peel_residual(
     reference_image=None,
     peak_peel_y_edges_only=False,
     peak_peel_y_edge_frac=0.25,
+    *,
+    show=False,
 ):
     """Peak-peel residual (raw image minus first-round Gaussian sum).
 
@@ -220,6 +196,8 @@ def visualize_peel_residual(
     if output_path:
         fig.savefig(output_path, dpi=200)
         print(f"[已保存残差图] {output_path}")
+    if show:
+        plt.show(block=True)
     plt.close(fig)
 
 

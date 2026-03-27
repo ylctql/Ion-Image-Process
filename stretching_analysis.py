@@ -26,7 +26,7 @@ DATA_DIR = PROJECT_ROOT / "20260305_1727"
 # 避免边缘离子的 sigma_major 被截断导致 ratio 失真。
 DETECT_KWARGS = dict(
     sigma_range=(0.3, 8.0),   # 允许 sigma_major 达 8 px (默认 3.5)
-    fit_hw=(5, 5),             # 11x11 窗口覆盖拉伸离子全貌 (默认 7x9)
+    fit_hw=(5, 5),             # 11x11 窗口覆盖拉伸离子全貌 (默认 9x7)
     refine=False,              # 跳过二次精修中的 sigma 收紧
 )
 QUADRATIC_Y_LIMIT = 40.0

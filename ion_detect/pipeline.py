@@ -15,7 +15,7 @@ from .preprocess import build_matched_kernel, peaks_from_detect_map
 
 
 def detect_ions(image, bg_sigma=(10, 30), peak_size=(5, 9),
-                rel_threshold=0.025, fit_hw=(3, 4),
+                rel_threshold=0.025, fit_hw=(4, 3),
                 sigma_range=(0.3, 3.5), use_matched_filter=True,
                 refine=True, fix_theta_zero=False,
                 use_y_threshold_comp=False,
