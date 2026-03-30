@@ -18,9 +18,9 @@ from matplotlib.colors import Normalize
 from datetime import datetime
 from pathlib import Path
 
-from output_paths import OUT_DATASET_VIZ, PROJECT_ROOT
+from output_paths import DEFAULT_DATA_DIR, OUT_DATASET_VIZ
 
-DATA_DIR = PROJECT_ROOT / "20260305_1727"
+DATA_DIR = DEFAULT_DATA_DIR
 OUTPUT_DIR = OUT_DATASET_VIZ
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 

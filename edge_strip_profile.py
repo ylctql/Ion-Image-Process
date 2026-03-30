@@ -16,7 +16,7 @@
   python edge_strip_profile.py 0 --col-metric max
   python edge_strip_profile.py 0 --peak-col-gallery
   python edge_strip_profile.py 0 --peak-col-gallery --y-fit-frac 0.35
-  python edge_strip_profile.py 0 --peak-col-gallery --add-neighbor-x
+  python edge_strip_profile.py 0 --peak-col-gallery
   python edge_strip_profile.py 0 --plot-center
   python edge_strip_profile.py 0 --plot-center fit
   python edge_strip_profile.py 0 --plot-center com
@@ -24,7 +24,7 @@
   python edge_strip_profile.py 0 --plot-center --double-peak-fit
   python edge_strip_profile.py 0 --plot-center --prominence
   python edge_strip_profile.py 0 --plot-center --prominence 0.5
-  python edge_strip_profile.py ::10 --out outputs/edge_strip_profiles
+  python edge_strip_profile.py ::10
 """
 
 from __future__ import annotations
@@ -42,12 +42,13 @@ _PROJECT_ROOT = Path(__file__).resolve().parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from output_paths import OUT_EDGE_STRIP, PROJECT_ROOT
+from output_paths import DEFAULT_DATA_DIR, OUT_EDGE_STRIP
 
 from ion_detect.boundary import estimate_crystal_boundary
 from ion_detect.cli_helpers import resolve_indices
 from ion_detect.edge_strip import outer_y_edge_column_profiles
 from ion_detect.edge_strip_profile_viz import plot_edge_strip_dashboard, show_peak_column_gallery
+from ion_detect.gaussian import _accumulate_peel_model
 from ion_detect.pipeline import detect_ions
 
 
@@ -108,14 +109,8 @@ def main() -> None:
     parser.add_argument(
         "--data-dir",
         type=Path,
-        default=PROJECT_ROOT / "20260305_1727",
+        default=DEFAULT_DATA_DIR,
         help="npy 数据目录",
-    )
-    parser.add_argument(
-        "--out",
-        type=Path,
-        default=OUT_EDGE_STRIP,
-        help="输出 PNG 目录",
     )
     parser.add_argument(
         "--y-edge-frac",
@@ -130,8 +125,8 @@ def main() -> None:
         default="raw",
         help=(
             "Which 2D map feeds strip column aggregation: raw; bgsub = image - Gaussian bg; "
-            "peel = first-round peak-peel residual (needs ions); "
-            "peel_bgsub = that residual minus Gaussian bg (same as detect_ions round-2 map input), needs ions."
+            "peel = raw minus sum of first-round fitted Gaussians (needs ions); "
+            "peel_bgsub = that residual minus Gaussian bg, needs ions."
         ),
     )
     parser.add_argument(
@@ -193,7 +188,7 @@ def main() -> None:
             "com：亮度加权质心 sum(y·w)/sum(w)（w=max(I,0)，必要时减 min(I)），无 prominence/高斯；"
             "com_fit：先算 com，再沿 y 递增 profile 上找严格局部极大（强于左右邻采样点），"
             "取与 com 距离最近的峰 y 作为标点（无局部极大则退回 com）。"
-            "可与 --y-fit-frac、--add-neighbor-x 组合；--peak-col-gallery 与此 MODE 一致（仅 gallery 时默认 fit）。"
+            "可与 --y-fit-frac 组合；列向 profile 默认使用 x−1,x,x+1 三列和。--peak-col-gallery 与此 MODE 一致（仅 gallery 时默认 fit）。"
         ),
     )
     parser.add_argument(
@@ -230,15 +225,8 @@ def main() -> None:
             "条带 1D 轮廓与辅助峰 x 仍始终由 --y-edge-frac 决定。"
         ),
     )
-    parser.add_argument(
-        "--add-neighbor-x",
-        action="store_true",
-        help=(
-            "列 y 向 profile 每个采样点为 x-1,x,x+1 三列强度之和（边界缺列则不加），"
-            "用于 --peak-col-gallery 与 --plot-center。"
-        ),
-    )
     args = parser.parse_args()
+    OUT_EDGE_STRIP.mkdir(parents=True, exist_ok=True)
 
     data_dir = args.data_dir
     files = sorted(f for f in data_dir.iterdir() if f.suffix == ".npy")
@@ -254,8 +242,6 @@ def main() -> None:
     _viz_fit_opts = args.peak_col_gallery or (args.plot_center is not None)
     if args.y_fit_frac is not None and not _viz_fit_opts:
         print("[提示] 已设置 --y-fit-frac 但未使用 --peak-col-gallery / --plot-center，该参数将忽略。")
-    if args.add_neighbor_x and not _viz_fit_opts:
-        print("[提示] 已设置 --add-neighbor-x 但未使用 --peak-col-gallery / --plot-center，该参数将忽略。")
     if args.double_peak_fit and not _viz_fit_opts:
         print("[提示] 已设置 --double-peak-fit 但未使用 --peak-col-gallery / --plot-center，该参数将忽略。")
     if args.prominence is not None and not _viz_fit_opts:
@@ -270,22 +256,19 @@ def main() -> None:
         left_panel = None
 
         if args.preprocess in ("peel", "peel_bgsub"):
-            peel_out = detect_ions(
-                image,
-                peak_peel=True,
-                return_peel_residual=True,
-            )
-            assert len(peel_out) == 3
-            _ions, boundary, peel_residual = peel_out
+            _ions, boundary = detect_ions(image)
             if boundary is None:
                 print(f"[{idx:04d}] {target.name}: no boundary, skip.")
                 continue
-            if peel_residual is None:
+            if not _ions:
                 print(
                     f"[{idx:04d}] {target.name}: "
-                    "no peak-peel residual (first round had no ions), skip peel preprocess."
+                    "no ions (cannot build peel residual), skip peel preprocess."
                 )
                 continue
+            h0, w0 = np.asarray(image, dtype=np.float64).shape
+            peel = _accumulate_peel_model(h0, w0, _ions, margin_sigma=4.5)
+            peel_residual = np.asarray(image, dtype=np.float64) - peel
             if args.preprocess == "peel_bgsub":
                 strip_map = _bgsub_array(peel_residual)
                 if args.plot_peel:
@@ -322,7 +305,7 @@ def main() -> None:
             f"{vlabel}≈{result['bot_peak_value']:.5g}"
         )
 
-        out_png = args.out / f"edge_strip_profile_{idx:04d}.png"
+        out_png = OUT_EDGE_STRIP / f"edge_strip_profile_{idx:04d}.png"
         plot_edge_strip_dashboard(
             image,
             boundary,
@@ -337,7 +320,6 @@ def main() -> None:
             plot_center=args.plot_center,
             clip_ellipse=clip_ellipse,
             y_fit_frac=args.y_fit_frac,
-            add_neighbor_x=args.add_neighbor_x,
             double_peak_fit=args.double_peak_fit,
             prominence_min=args.prominence,
         )
@@ -351,7 +333,6 @@ def main() -> None:
                 boundary=boundary,
                 clip_ellipse=clip_ellipse,
                 y_fit_frac=args.y_fit_frac,
-                add_neighbor_x=args.add_neighbor_x,
                 double_peak_fit=args.double_peak_fit,
                 prominence_min=args.prominence,
                 center_mode=args.plot_center if args.plot_center is not None else "fit",

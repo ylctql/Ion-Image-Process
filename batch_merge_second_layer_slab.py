@@ -1,12 +1,12 @@
 """
 对多组数据目录批量执行与
 
-    python merge_ion_centers.py <indices> --add-neighbor-x --second-layer-slab ...
+    python merge_ion_centers.py <indices> --second-layer-slab ...
 
 等价的 second-layer-slab 流程；按组保存识别结果、带寻峰标注的合并中心 y 直方图、每帧叠加图；
 命令行实时输出进度与离子数；全部完成后汇总绘制离子数/ y 分布直方图。
 
-单目录多帧：``--data-dir``；默认索引 ``0:997``（即 997 帧）。可加 ``--add-neighbor-x`` 等与 merge_ion_centers 一致。
+单目录多帧：``--data-dir``；默认索引 ``0:997``（即 997 帧）。其余条带/合并参数与 merge_ion_centers 一致。
 本脚本对**每一帧分别**完成 second-layer-slab：每帧的 y 直方图与 L1/L2/L3 寻峰**仅使用该帧**
 的合并中心，再对该帧做条带替换与绘图。这与 ``merge_ion_centers.py 0:997 --second-layer-slab``
 一次调用时**把多帧 y 合并成一张直方图**的行为不同。
@@ -15,12 +15,12 @@
 
 用法示例（同一目录 997 帧，帧 0…996）：
 
-  python batch_merge_second_layer_slab.py --add-neighbor-x
+  python batch_merge_second_layer_slab.py
   （默认 ``--data-dir`` 为项目下 ``20260305_1727``，与 merge_ion_centers 一致；索引默认 ``0:997``。）
 
 只跑单帧 800 并指定目录：
 
-  python batch_merge_second_layer_slab.py 800 --data-dir D:/data/one_run --add-neighbor-x
+  python batch_merge_second_layer_slab.py 800 --data-dir D:/data/one_run
 """
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ from merge_ion_centers import (  # noqa: E402
     fuse_second_layer_with_others_by_distance,
     merge_centers_hybrid,
 )
-from output_paths import OUT_AMP_Y_FIT, OUTPUTS_ROOT, PROJECT_ROOT
+from output_paths import DEFAULT_DATA_DIR, new_batch_merge_slab_run_dir
 from second_layer_core import (  # noqa: E402
     _peak_indices_with_padded_ends,
     ions_from_second_layer_row,
@@ -71,9 +71,7 @@ def _process_one_frame(
     idx: int,
     *,
     image_loader: Any,
-    amp_coef_path: Path,
     clip_ellipse: bool,
-    use_matched_filter: bool,
     preprocess: str,
     ex_lo: float,
     ex_hi: float,
@@ -81,18 +79,11 @@ def _process_one_frame(
     y_fit_frac: float,
     peak_dist: float,
     col_metric: str,
-    add_neighbor_x: bool,
     strip_center_mode: str,
     ion_dist: float,
 ) -> tuple[np.ndarray, Any, dict, list[dict[str, Any]], int, dict] | None:
     image = image_loader(target)
-    ions, boundary = detect_ions(
-        image,
-        fix_theta_zero=True,
-        use_matched_filter=use_matched_filter,
-        amp_y_coef_path=amp_coef_path,
-        amp_y_coef_mode="even",
-    )
+    ions, boundary = detect_ions(image)
     if boundary is None:
         logging.warning("[%04d] %s: 无 boundary，跳过", idx, target.name)
         return None
@@ -122,7 +113,6 @@ def _process_one_frame(
         peak_dist=float(peak_dist),
         clip_ellipse=clip_ellipse,
         y_fit_frac=float(y_fit_frac),
-        add_neighbor_x=add_neighbor_x,
         strip_center_mode=strip_center_mode,
     )
     merged, n_fused = fuse_detect_strip_by_distance(merged, float(ion_dist))
@@ -233,7 +223,6 @@ def _run_one_data_dir(
 ) -> dict[str, Any]:
     """对单个目录逐帧 second-layer-slab：每帧仅用本帧合并中心建 y 直方图再寻峰与替换。"""
     t0 = time.perf_counter()
-    amp_coef_path: Path = args.amp_coef_path
     clip_ellipse = not args.no_clip_ellipse
     ex_lo, ex_hi = float(args.edge_x_range[0]), float(args.edge_x_range[1])
     if args.profile_x_range is None:
@@ -272,9 +261,7 @@ def _run_one_data_dir(
             target,
             idx,
             image_loader=_load,
-            amp_coef_path=amp_coef_path,
             clip_ellipse=clip_ellipse,
-            use_matched_filter=not args.no_matched_filter,
             preprocess=args.preprocess,
             ex_lo=ex_lo,
             ex_hi=ex_hi,
@@ -282,7 +269,6 @@ def _run_one_data_dir(
             y_fit_frac=float(args.y_fit_frac),
             peak_dist=float(args.peak_dist),
             col_metric=args.col_metric,
-            add_neighbor_x=args.add_neighbor_x,
             strip_center_mode=args.strip_center_mode,
             ion_dist=float(args.ion_dist),
         )
@@ -530,7 +516,7 @@ def main() -> None:
     parser.add_argument(
         "--data-dir",
         type=Path,
-        default=PROJECT_ROOT / "20260305_1727",
+        default=DEFAULT_DATA_DIR,
         help="单个含 .npy 的数据目录（默认与 merge_ion_centers.py 相同）",
     )
     parser.add_argument(
@@ -542,34 +528,18 @@ def main() -> None:
             "未指定时仅处理 --data-dir"
         ),
     )
-    parser.add_argument(
-        "--out",
-        type=Path,
-        default=None,
-        help="输出根目录；默认 outputs/batch_merge_slab_<时间戳>",
-    )
-    parser.add_argument("--log-file", type=Path, default=None, help="同时将日志写入文件")
-    parser.add_argument(
-        "--amp-coef",
-        type=Path,
-        default=OUT_AMP_Y_FIT / "amp_vs_y_coef_10.npy",
-        help="detect_ions 幅度系数 npy",
-    )
-
     parser.add_argument("--edge-x-range", type=float, nargs=2, default=[250.0, 750.0])
     parser.add_argument("--y-edge-frac", type=float, default=0.25)
     parser.add_argument("--y-fit-frac", type=float, default=0.35)
     parser.add_argument("--peak-dist", type=float, default=5.0)
     parser.add_argument("--col-metric", choices=("sum", "mean", "max"), default="mean")
     parser.add_argument("--strip-center-mode", choices=("com", "com_fit", "fit"), default="com")
-    parser.add_argument("--add-neighbor-x", action="store_true")
     parser.add_argument(
         "--preprocess",
         choices=("raw", "bgsub", "peel", "peel_bgsub"),
         default="raw",
     )
     parser.add_argument("--no-clip-ellipse", action="store_true")
-    parser.add_argument("--no-matched-filter", action="store_true")
     parser.add_argument("--ion-dist", type=float, default=4.0)
 
     parser.add_argument("--profile-x-range", type=float, nargs=2, default=None)
@@ -584,18 +554,14 @@ def main() -> None:
     parser.add_argument("--second-layer-y-cut-pad", type=float, default=1.0)
 
     args = parser.parse_args()
-    args.amp_coef_path = args.amp_coef
 
-    root_out = args.out
-    if root_out is None:
-        root_out = OUTPUTS_ROOT / f"batch_merge_slab_{time.strftime('%Y%m%d_%H%M%S')}"
-    root_out = root_out.resolve()
-    root_out.mkdir(parents=True, exist_ok=True)
+    root_out = new_batch_merge_slab_run_dir()
 
-    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
-    if args.log_file:
-        args.log_file.parent.mkdir(parents=True, exist_ok=True)
-        handlers.append(logging.FileHandler(args.log_file, encoding="utf-8"))
+    log_path = root_out / "batch_run.log"
+    handlers: list[logging.Handler] = [
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(log_path, encoding="utf-8"),
+    ]
     logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, datefmt=DATE_FORMAT, handlers=handlers)
     logging.info("输出根目录: %s", root_out)
 

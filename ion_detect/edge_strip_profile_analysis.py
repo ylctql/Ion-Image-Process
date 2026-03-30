@@ -135,7 +135,7 @@ def column_y_profile_in_strip(
     mask_strip: np.ndarray,
     col_ix: int,
     *,
-    add_neighbor_x: bool = False,
+    add_neighbor_x: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Within one strip mask, return (y pixel index, pixel values) for column ``col_ix``.
 
@@ -418,7 +418,7 @@ def fitted_xy_for_auxiliary_strip_peaks(
     peak_dist: float,
     clip_ellipse: bool,
     y_fit_frac: float | None,
-    add_neighbor_x: bool,
+    add_neighbor_x: bool = True,
     double_peak_fit: bool = False,
     prominence_min: float | None = None,
     center_mode: str = "fit",

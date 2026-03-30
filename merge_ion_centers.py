@@ -10,7 +10,7 @@
 示例：
   python merge_ion_centers.py 0
   python merge_ion_centers.py 0 --edge-x-range 250 750 --y-edge-frac 0.25 \\
-    --y-fit-frac 0.35 --add-neighbor-x --peak-dist 5
+    --y-fit-frac 0.35 --peak-dist 5
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from output_paths import OUT_AMP_Y_FIT, OUT_ION_CENTERS_MERGED, PROJECT_ROOT
+from output_paths import DEFAULT_DATA_DIR, OUT_ION_CENTERS_MERGED
 
 from ion_detect.cli_helpers import resolve_indices
 from ion_detect.edge_strip import outer_y_edge_column_profiles
@@ -234,7 +234,6 @@ def merge_centers_hybrid(
     peak_dist: float,
     clip_ellipse: bool,
     y_fit_frac: float | None,
-    add_neighbor_x: bool,
     strip_center_mode: str = "com",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """返回合并后的点列表（每项含 x0,y0,source）及统计信息 dict。"""
@@ -246,7 +245,7 @@ def merge_centers_hybrid(
         peak_dist=peak_dist,
         clip_ellipse=clip_ellipse,
         y_fit_frac=y_fit_frac,
-        add_neighbor_x=add_neighbor_x,
+        add_neighbor_x=True,
         double_peak_fit=False,
         prominence_min=None,
         center_mode=strip_center_mode,
@@ -396,8 +395,7 @@ def main() -> None:
         default=["0"],
         help="帧索引（与 ion_detect 相同）",
     )
-    parser.add_argument("--data-dir", type=Path, default=PROJECT_ROOT / "20260305_1727")
-    parser.add_argument("--out", type=Path, default=OUT_ION_CENTERS_MERGED)
+    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument(
         "--edge-x-range",
         type=float,
@@ -437,11 +435,6 @@ def main() -> None:
         help="条带列 y 中心：com（与示例一致）/ com_fit / fit",
     )
     parser.add_argument(
-        "--add-neighbor-x",
-        action="store_true",
-        help="列 profile 使用 x-1,x,x+1 三列和（与 edge_strip 一致）",
-    )
-    parser.add_argument(
         "--preprocess",
         choices=("raw", "bgsub", "peel", "peel_bgsub"),
         default="raw",
@@ -456,11 +449,6 @@ def main() -> None:
         "--show",
         action="store_true",
         help="交互显示窗口（默认仅保存 PNG）",
-    )
-    parser.add_argument(
-        "--no-matched-filter",
-        action="store_true",
-        help="detect_ions 禁用匹配滤波（与 ion_detect --no-matched-filter 一致）",
     )
     parser.add_argument(
         "--ion-dist",
@@ -553,6 +541,7 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
+    OUT_ION_CENTERS_MERGED.mkdir(parents=True, exist_ok=True)
 
     data_dir = args.data_dir
     files = sorted(f for f in data_dir.iterdir() if f.suffix == ".npy")
@@ -562,7 +551,6 @@ def main() -> None:
     if not selected:
         raise SystemExit("没有可处理的索引")
 
-    amp_coef_path = OUT_AMP_Y_FIT / "amp_vs_y_coef_10.npy"
     clip_ellipse = not args.no_clip_ellipse
     ex_lo, ex_hi = float(args.edge_x_range[0]), float(args.edge_x_range[1])
     if args.profile_x_range is None:
@@ -575,13 +563,7 @@ def main() -> None:
 
     def _process_one_frame(idx: int, target: Path) -> tuple[np.ndarray, Any, dict, list[dict[str, Any]], int, dict] | None:
         image = np.load(target)
-        ions, boundary = detect_ions(
-            image,
-            fix_theta_zero=True,
-            use_matched_filter=not args.no_matched_filter,
-            amp_y_coef_path=amp_coef_path,
-            amp_y_coef_mode="even",
-        )
+        ions, boundary = detect_ions(image)
         if boundary is None:
             print(f"[{idx:04d}] {target.name}: 无 boundary，跳过")
             return None
@@ -614,7 +596,6 @@ def main() -> None:
             peak_dist=float(args.peak_dist),
             clip_ellipse=clip_ellipse,
             y_fit_frac=y_fit,
-            add_neighbor_x=args.add_neighbor_x,
             strip_center_mode=args.strip_center_mode,
         )
         merged, n_fused = fuse_detect_strip_by_distance(merged, float(args.ion_dist))
@@ -720,7 +701,7 @@ def main() -> None:
                 f"strip +{stats['n_strip_used']}, fused {n_fused} | "
                 f"total points {len(merged)}"
             )
-            out_png = args.out / f"ion_centers_merged_{idx:04d}.png"
+            out_png = OUT_ION_CENTERS_MERGED / f"ion_centers_merged_{idx:04d}.png"
             print(f"\n[{idx:04d}] {target.name}")
             print(
                 f"  detect: {stats['n_detect_raw']} raw, "
@@ -762,7 +743,7 @@ def main() -> None:
                 f"strip +{stats['n_strip_used']}, fused {n_fused} "
                 f"(ion-dist={float(args.ion_dist):g}, x slab {stats['edge_x'][0]:.0f}–{stats['edge_x'][1]:.0f})"
             )
-            out_png = args.out / f"ion_centers_merged_{idx:04d}.png"
+            out_png = OUT_ION_CENTERS_MERGED / f"ion_centers_merged_{idx:04d}.png"
             print(f"\n[{idx:04d}] {target.name}")
             print(
                 f"  detect: {stats['n_detect_raw']} raw, "

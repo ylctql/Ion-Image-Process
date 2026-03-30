@@ -68,7 +68,7 @@ def plot_edge_strip_dashboard(
     plot_center: str | None = None,
     clip_ellipse: bool = True,
     y_fit_frac: float | None = None,
-    add_neighbor_x: bool = False,
+    add_neighbor_x: bool = True,
     double_peak_fit: bool = False,
     prominence_min: float | None = None,
 ) -> None:
@@ -230,7 +230,7 @@ def show_peak_column_gallery(
     boundary: tuple[float, float, float, float],
     clip_ellipse: bool,
     y_fit_frac: float | None = None,
-    add_neighbor_x: bool = False,
+    add_neighbor_x: bool = True,
     double_peak_fit: bool = False,
     prominence_min: float | None = None,
     center_mode: str = "fit",

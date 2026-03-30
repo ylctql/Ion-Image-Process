@@ -3,7 +3,7 @@
 
 用法示例:
   python vis_selected_npy.py 20260305_005542 20260305_010000
-  python vis_selected_npy.py --dir 20260305_1727 --out outputs/npy_plots 20260305_005542
+  python vis_selected_npy.py --dir 20260305_1727 20260305_005542
   python vis_selected_npy.py --one-figure --cmap inferno 20260305_005542 20260305_010000
   # (171,1024) 数据：仅对行方向插值上采样 4 倍
   python vis_selected_npy.py --zoom-axes 4,1 20260305_005542
@@ -22,10 +22,7 @@ import numpy as np
 from matplotlib.colors import Normalize
 from scipy.ndimage import zoom
 
-from output_paths import OUT_NPY_SELECTED, PROJECT_ROOT
-
-DEFAULT_DATA_DIR = PROJECT_ROOT / "20260305_1727"
-DEFAULT_OUT_DIR = OUT_NPY_SELECTED
+from output_paths import DEFAULT_DATA_DIR, OUT_NPY_SELECTED, default_vis_selected_montage_png
 
 
 def _resolve_npy_path(data_dir: Path, name: str) -> Path:
@@ -182,12 +179,6 @@ def main() -> None:
         help=f"数据目录（默认: {DEFAULT_DATA_DIR}）",
     )
     parser.add_argument(
-        "--out",
-        type=Path,
-        default=DEFAULT_OUT_DIR,
-        help=f"输出目录或单图路径（默认: {DEFAULT_OUT_DIR}）",
-    )
-    parser.add_argument(
         "--one-figure",
         action="store_true",
         help="将所有帧画在一张子图网格中",
@@ -248,6 +239,7 @@ def main() -> None:
 
     paths = [_resolve_npy_path(data_dir, name) for name in args.files]
     share_scale = not args.per_file_scale and len(paths) > 1
+    OUT_NPY_SELECTED.mkdir(parents=True, exist_ok=True)
 
     if args.zoom_axes is None:
         zoom_axes = (1.0, 1.0)
@@ -272,12 +264,9 @@ def main() -> None:
                 show_only=True,
             )
         else:
-            out_path = args.out
-            if out_path.suffix.lower() != ".png":
-                out_path = out_path / "selected_montage.png"
             plot_one_figure(
                 paths,
-                out_path,
+                default_vis_selected_montage_png(),
                 args.cmap,
                 args.dpi,
                 share_scale,
@@ -300,12 +289,9 @@ def main() -> None:
                 show_only=True,
             )
         else:
-            out_dir = args.out
-            if out_dir.suffix.lower() == ".png":
-                raise SystemExit("非 --one-figure 模式下 --out 应为目录，不是 .png 文件")
             plot_separate_files(
                 paths,
-                out_dir,
+                OUT_NPY_SELECTED,
                 args.cmap,
                 args.dpi,
                 share_scale,

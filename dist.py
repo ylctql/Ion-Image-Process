@@ -4,7 +4,7 @@ import argparse
 
 import matplotlib.pyplot as plt
 
-from output_paths import OUT_HISTOGRAM, OUT_ION_POS
+from output_paths import OUT_ION_POS, default_cdist_hist_png
 import numpy as np
 from scipy.spatial.distance import cdist
 
@@ -95,12 +95,6 @@ def main():
         help="Number of histogram bins.",
     )
     parser.add_argument(
-        "--output",
-        type=Path,
-        default=None,
-        help="Output path of histogram image (default: outputs/histogram/cdist_hist_{configs}.png).",
-    )
-    parser.add_argument(
         "--show",
         action="store_true",
         help="Display figure window after saving.",
@@ -119,10 +113,7 @@ def main():
     distances = compute_all_pair_distances(config_files)
     print(f"[info] computed {len(distances)} pairwise distances")
 
-    output_path = args.output
-    if output_path is None:
-        output_path = OUT_HISTOGRAM / f"cdist_hist_{len(config_files)}.png"
-
+    output_path = default_cdist_hist_png(len(config_files))
     plot_histogram(
         distances,
         config_count=len(config_files),

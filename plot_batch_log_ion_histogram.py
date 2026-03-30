@@ -8,6 +8,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from output_paths import OUT_HISTOGRAM, default_log_ion_hist_png
+
 # batch_merge_second_layer_slab per-frame log line contains: 离子数=1234
 ION_COUNT_RE = re.compile(r"离子数=(\d+)")
 
@@ -24,12 +26,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Histogram of per-frame ion counts from batch run log.")
     parser.add_argument("log_file", type=Path, help="Path to batch_run.log (or similar)")
     parser.add_argument(
-        "--out",
-        type=Path,
-        default=None,
-        help="Output PNG (default: same directory as log, ion_count_histogram.png)",
-    )
-    parser.add_argument(
         "--bin-width",
         type=float,
         default=1.0,
@@ -39,11 +35,8 @@ def main() -> None:
 
     log_path = args.log_file.resolve()
     counts = parse_ion_counts(log_path)
-    out = args.out
-    if out is None:
-        out = log_path.parent / "ion_count_histogram_from_log.png"
-    else:
-        out = out.resolve()
+    OUT_HISTOGRAM.mkdir(parents=True, exist_ok=True)
+    out = default_log_ion_hist_png(log_path.stem)
 
     n = int(counts.size)
     mu = float(np.mean(counts))

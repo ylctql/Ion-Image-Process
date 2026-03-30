@@ -29,7 +29,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from output_paths import OUT_Y_LAYER_PROFILE, PROJECT_ROOT
+from output_paths import DEFAULT_DATA_DIR, OUT_Y_LAYER_PROFILE
 
 from ion_detect.boundary import estimate_crystal_boundary
 from ion_detect.cli_helpers import parse_slice_token
@@ -246,8 +246,7 @@ def main() -> None:
         default=["0"],
         help="帧索引（numpy 风格，与 ion_detect 相同）",
     )
-    parser.add_argument("--data-dir", type=Path, default=PROJECT_ROOT / "20260305_1727", help="npy 目录")
-    parser.add_argument("--out", type=Path, default=OUT_Y_LAYER_PROFILE, help="输出 PNG 目录")
+    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="npy 目录")
     parser.add_argument(
         "--x-range",
         type=str,
@@ -268,6 +267,7 @@ def main() -> None:
     )
     parser.add_argument("--show", action="store_true", help="显示交互窗口")
     args = parser.parse_args()
+    OUT_Y_LAYER_PROFILE.mkdir(parents=True, exist_ok=True)
 
     data_dir = args.data_dir
     files = sorted(f for f in data_dir.iterdir() if f.suffix == ".npy")
@@ -321,7 +321,7 @@ def main() -> None:
             f"a={boundary[2]:.1f}, b={boundary[3]:.1f})  x=[{x0},{x1})  y intervals={intervals}"
         )
 
-        out_png = args.out / f"y_layer_profile_{idx:04d}.png"
+        out_png = OUT_Y_LAYER_PROFILE / f"y_layer_profile_{idx:04d}.png"
         plot_y_layer_dashboard(
             image,
             boundary,

@@ -19,7 +19,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from output_paths import OUT_AMP_Y_FIT, OUT_SECOND_LAYER_PEAKS, PROJECT_ROOT
+from output_paths import DEFAULT_DATA_DIR, OUT_SECOND_LAYER_PEAKS
 
 from ion_detect.cli_helpers import resolve_indices
 from ion_detect.edge_strip import outer_y_edge_column_profiles
@@ -48,12 +48,9 @@ def _collect_merged_centers(
     peak_dist: float,
     col_metric: str,
     strip_center_mode: str,
-    add_neighbor_x: bool,
     preprocess: str,
     clip_ellipse: bool,
     ion_dist: float,
-    use_matched_filter: bool,
-    amp_coef_path: Path,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     xs: list[float] = []
     ys: list[float] = []
@@ -61,13 +58,7 @@ def _collect_merged_centers(
     for idx in selected:
         target = files[idx]
         image = np.load(target)
-        ions, boundary = detect_ions(
-            image,
-            fix_theta_zero=True,
-            use_matched_filter=use_matched_filter,
-            amp_y_coef_path=amp_coef_path,
-            amp_y_coef_mode="even",
-        )
+        ions, boundary = detect_ions(image)
         if boundary is None:
             continue
         try:
@@ -93,7 +84,6 @@ def _collect_merged_centers(
             peak_dist=peak_dist,
             clip_ellipse=clip_ellipse,
             y_fit_frac=float(y_fit_frac),
-            add_neighbor_x=add_neighbor_x,
             strip_center_mode=strip_center_mode,
         )
         merged, _nf = fuse_detect_strip_by_distance(merged, float(ion_dist))
@@ -287,8 +277,7 @@ def main() -> None:
         description="合并中心 y 直方图选峰 → 三行和剖面找 x 峰 → 在 x±N 与 y0±halfwin 上 COM 得精确 y 并出图",
     )
     parser.add_argument("indices", nargs="*", default=["0"], help="帧索引（与 merge_ion_centers 相同）")
-    parser.add_argument("--data-dir", type=Path, default=PROJECT_ROOT / "20260305_1727")
-    parser.add_argument("--out", type=Path, default=OUT_SECOND_LAYER_PEAKS)
+    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument(
         "--edge-x-range",
         type=float,
@@ -314,7 +303,6 @@ def main() -> None:
         choices=("com", "com_fit", "fit"),
         default="com",
     )
-    parser.add_argument("--add-neighbor-x", action="store_true")
     parser.add_argument(
         "--preprocess",
         choices=("raw", "bgsub", "peel", "peel_bgsub"),
@@ -322,7 +310,6 @@ def main() -> None:
     )
     parser.add_argument("--no-clip-ellipse", action="store_true")
     parser.add_argument("--show", action="store_true")
-    parser.add_argument("--no-matched-filter", action="store_true")
     parser.add_argument("--ion-dist", type=float, default=4.0, metavar="PX")
     parser.add_argument(
         "--hist-prominence",
@@ -353,6 +340,7 @@ def main() -> None:
         help="合并中心 y 直方图上，按峰位 y 从小到大排序后的峰序号（从 1 计数；默认 2 即原“第二峰”）",
     )
     args = parser.parse_args()
+    OUT_SECOND_LAYER_PEAKS.mkdir(parents=True, exist_ok=True)
 
     data_dir = args.data_dir
     files = sorted(f for f in data_dir.iterdir() if f.suffix == ".npy")
@@ -370,7 +358,6 @@ def main() -> None:
     if px_lo > px_hi:
         px_lo, px_hi = px_hi, px_lo
 
-    amp_path = OUT_AMP_Y_FIT / "amp_vs_y_coef_10.npy"
     clip_ellipse = not args.no_clip_ellipse
 
     x_arr, y_arr, fid_arr = _collect_merged_centers(
@@ -383,12 +370,9 @@ def main() -> None:
         peak_dist=float(args.peak_dist),
         col_metric=args.col_metric,
         strip_center_mode=args.strip_center_mode,
-        add_neighbor_x=args.add_neighbor_x,
         preprocess=args.preprocess,
         clip_ellipse=clip_ellipse,
         ion_dist=float(args.ion_dist),
-        use_matched_filter=not args.no_matched_filter,
-        amp_coef_path=amp_path,
     )
     if y_arr.size == 0:
         raise SystemExit("未得到任何合并中心，请检查数据与参数")
@@ -405,7 +389,7 @@ def main() -> None:
     )
 
     fn_line = f"line{line_id}"
-    hist_png = args.out / f"y_histogram_second_layer_{fn_line}.png"
+    hist_png = OUT_SECOND_LAYER_PEAKS / f"y_histogram_second_layer_{fn_line}.png"
     _plot_y_histogram_selected_peak(
         y_arr,
         bin_edges,
@@ -452,8 +436,8 @@ def main() -> None:
             ion_xy.append((x_px, y_com, float(xs[ix]), r0, r1, x_pl, x_ph))
 
         stem = Path(target.name).stem
-        out_profile = args.out / f"second_layer_profile_{idx:04d}_{fn_line}.png"
-        out_image = args.out / f"second_layer_image_{idx:04d}_{fn_line}.png"
+        out_profile = OUT_SECOND_LAYER_PEAKS / f"second_layer_profile_{idx:04d}_{fn_line}.png"
+        out_image = OUT_SECOND_LAYER_PEAKS / f"second_layer_image_{idx:04d}_{fn_line}.png"
         _plot_peak_detection_figure(
             fid=idx,
             stem=stem,

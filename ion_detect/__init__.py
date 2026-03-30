@@ -5,6 +5,7 @@
 --------
 gaussian, boundary, preprocess, fitting, peel — 算法组件
 binarize — 减背景图二值化
+blob_preprocess / blob_components / blob_workflow / blob_viz — 二值连通域与最小外接矩形工作流
 pipeline — ``detect_ions`` 端到端流程
 viz — 可视化与摘要
 cli_helpers — 批处理索引解析
@@ -12,14 +13,36 @@ cli_helpers — 批处理索引解析
 算法流程见 ``pipeline.detect_ions`` 文档字符串。
 """
 from .binarize import bgsub_binarize, bgsub_binarize_u8
+from .blob_components import (
+    MinAreaRect,
+    axis_aligned_bounding_rect_xy,
+    binarize_foreground,
+    label_connected_components,
+    rects_from_labeled,
+)
+from .blob_preprocess import BlobPreprocessResult, map_for_binarize, preprocess_for_blob_analysis
+from .blob_workflow import BlobWorkflowResult, run_blob_workflow
 from .edge_strip import outer_y_edge_column_profiles, outer_y_edge_strip_masks
+from .blob_viz import visualize_blob_workflow, visualize_blob_rects
 from .pipeline import detect_ions
 from .viz import print_summary, visualize, visualize_bgsub, visualize_bgsub_binarized
 
 __all__ = [
+    "BlobPreprocessResult",
+    "BlobWorkflowResult",
+    "MinAreaRect",
+    "axis_aligned_bounding_rect_xy",
     "bgsub_binarize",
     "bgsub_binarize_u8",
+    "binarize_foreground",
     "detect_ions",
+    "label_connected_components",
+    "map_for_binarize",
+    "preprocess_for_blob_analysis",
+    "rects_from_labeled",
+    "run_blob_workflow",
+    "visualize_blob_rects",
+    "visualize_blob_workflow",
     "visualize",
     "visualize_bgsub",
     "visualize_bgsub_binarized",

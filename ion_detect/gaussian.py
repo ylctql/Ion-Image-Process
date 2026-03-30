@@ -22,20 +22,8 @@ def _gauss2d_aligned(coords, amp, x0, y0, sx, sy, offset):
     )
 
 
-def _two_gauss2d_aligned_flat(xy, a1, x1, y1, sx1, sy1, a2, x2, y2, sx2, sy2, b):
-    """两峰轴对齐高斯之和 (展平坐标), 供 curve_fit 使用。"""
-    x, y = xy
-    g1 = a1 * np.exp(
-        -0.5 * ((x - x1) ** 2 / sx1**2 + (y - y1) ** 2 / sy1**2)
-    )
-    g2 = a2 * np.exp(
-        -0.5 * ((x - x2) ** 2 / sx2**2 + (y - y2) ** 2 / sy2**2)
-    )
-    return b + g1 + g2
-
-
 def _ion_gaussian_core(ion: dict, x: np.ndarray, y: np.ndarray) -> np.ndarray:
-    """无局部 offset 的 2D 高斯正值核, 与单峰 / 联合拟合使用的模型一致。
+    """无局部 offset 的 2D 高斯正值核, 与单峰拟合使用的模型一致。
 
     轴对齐拟合 (θ=0) 在结果中带 _sigma_x/_sigma_y; 一般椭圆用 sigma_minor/sigma_major 与 theta_deg。
     """

@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 
 from .binarize import bgsub_binarize
-from .peel import y_edge_band_thresholds
 
 
 # 与像素坐标一致：x/y 单位同为像素，作图时保持正方形像素（勿用 auto 拉扁椭圆）
@@ -160,7 +159,14 @@ def visualize_bgsub(
     if not np.isfinite(ap) or ap < 1e-18:
         ap = max(float(np.nanmax(np.abs(z))) if z.size else 0.0, 1e-12)
     im = ax.imshow(z, cmap="RdBu_r", aspect=_VIS_ASPECT, vmin=-ap, vmax=ap)
-    plt.colorbar(im, ax=ax, fraction=0.025, pad=0.02, label="raw − Gaussian bg")
+    plt.colorbar(
+        im,
+        ax=ax,
+        orientation="horizontal",
+        fraction=0.046,
+        pad=0.12,
+        label="raw − Gaussian bg",
+    )
     for ion in ions:
         ell = Ellipse(
             xy=(ion["x0"], ion["y0"]),
@@ -253,7 +259,14 @@ def visualize_bgsub_binarized(
     # Figure 1: bgsub
     fig0, ax0 = plt.subplots(1, 1, figsize=(14, 8), constrained_layout=True)
     im0 = ax0.imshow(z, cmap="RdBu_r", aspect=_VIS_ASPECT, vmin=-ap, vmax=ap)
-    plt.colorbar(im0, ax=ax0, fraction=0.046, pad=0.02, label="raw − Gaussian bg")
+    plt.colorbar(
+        im0,
+        ax=ax0,
+        orientation="horizontal",
+        fraction=0.046,
+        pad=0.12,
+        label="raw − Gaussian bg",
+    )
     _overlays(ax0)
     ax0.set_title(
         f"{title}   [bgsub; binarize {rule} {threshold:g}]",
@@ -271,7 +284,14 @@ def visualize_bgsub_binarized(
     # Figure 2: binary mask
     fig1, ax1 = plt.subplots(1, 1, figsize=(14, 8), constrained_layout=True)
     im1 = ax1.imshow(mask.astype(np.float64), cmap="gray", aspect=_VIS_ASPECT, vmin=0.0, vmax=1.0)
-    plt.colorbar(im1, ax=ax1, fraction=0.046, pad=0.02, label="foreground=1")
+    plt.colorbar(
+        im1,
+        ax=ax1,
+        orientation="horizontal",
+        fraction=0.046,
+        pad=0.12,
+        label="foreground=1",
+    )
     _overlays(ax1)
     ax1.set_title(
         f"{title}   [binary bgsub {rule} {threshold:g}  |  fg {n_fg} px ({frac:.2f}%)]",
@@ -285,129 +305,6 @@ def visualize_bgsub_binarized(
     if show:
         plt.show()
     plt.close(fig1)
-
-
-def visualize_peel_residual(
-    residual,
-    title="",
-    output_path=None,
-    boundary=None,
-    reference_image=None,
-    peak_peel_y_edges_only=False,
-    peak_peel_y_edge_frac=0.25,
-    show=False,
-):
-    """Peak-peel residual (raw image minus first-round Gaussian sum).
-
-    If ``reference_image`` is set, ``vmin``/``vmax`` match ``visualize``:
-    1st and 99.5th percentile of the raw frame so gray levels are comparable
-    with the ion ellipse PNG (values outside range clip to black/white).
-    If ``None``, uses percentiles of ``residual`` only (legacy behavior).
-
-    When ``boundary`` is set, draws semi-transparent y-edge bands for
-    ``|y-cy|/b >= 1 - peak_peel_y_edge_frac`` (same as
-    ``filter_peak_yx_y_edge_bands``). Round-2 actually restricts to these bands
-    only if ``peak_peel_y_edges_only`` is enabled in the detection run.
-
-    If show is True, display the figure with ``plt.show()`` (after saving if
-    output_path is set).
-    """
-    fig, ax = plt.subplots(1, 1, figsize=(14, 8))
-    if reference_image is not None:
-        ref = np.asarray(reference_image, dtype=np.float64)
-        lo = float(np.percentile(ref, 1))
-        hi = float(np.percentile(ref, 99.5))
-        if not np.isfinite(lo) or not np.isfinite(hi) or lo >= hi:
-            lo = float(np.nanmin(ref))
-            hi = float(np.nanmax(ref))
-            if lo >= hi:
-                lo, hi = lo - 1.0, hi + 1.0
-    else:
-        lo = float(np.percentile(residual, 1))
-        hi = float(np.percentile(residual, 99.5))
-        if not np.isfinite(lo) or not np.isfinite(hi) or lo >= hi:
-            lo, hi = float(np.nanmin(residual)), float(np.nanmax(residual))
-            if lo >= hi:
-                lo, hi = lo - 1.0, hi + 1.0
-    h, w = int(residual.shape[0]), int(residual.shape[1])
-    ax.imshow(residual, cmap="gray", aspect="equal", vmin=lo, vmax=hi)
-
-    y_img_max = float(max(h - 1, 0))
-    if boundary is not None:
-        edges = y_edge_band_thresholds(boundary, peak_peel_y_edge_frac)
-        if edges is not None:
-            y_below, y_above = edges
-            if y_below > 0.0:
-                y_top_band_end = min(y_below, y_img_max)
-                if y_top_band_end > 0.0:
-                    ax.axhspan(
-                        0.0,
-                        y_top_band_end,
-                        facecolor="darkmagenta",
-                        alpha=0.14,
-                        edgecolor="none",
-                        zorder=2,
-                    )
-                    ax.axhline(
-                        y_top_band_end,
-                        color="darkmagenta",
-                        linestyle=":",
-                        linewidth=1.0,
-                        alpha=0.85,
-                        zorder=4,
-                    )
-            if y_above < y_img_max:
-                y_bot_band_start = max(y_above, 0.0)
-                if y_bot_band_start < y_img_max:
-                    ax.axhspan(
-                        y_bot_band_start,
-                        y_img_max,
-                        facecolor="darkmagenta",
-                        alpha=0.14,
-                        edgecolor="none",
-                        zorder=2,
-                    )
-                    ax.axhline(
-                        y_bot_band_start,
-                        color="darkmagenta",
-                        linestyle=":",
-                        linewidth=1.0,
-                        alpha=0.85,
-                        zorder=4,
-                    )
-
-    if boundary is not None:
-        bcx, bcy, ba, bb = boundary
-        bnd_ell = Ellipse(
-            xy=(bcx, bcy), width=2 * ba, height=2 * bb, angle=0,
-            edgecolor="cyan", facecolor="none",
-            linewidth=1.2, linestyle="--", alpha=0.9, zorder=6,
-        )
-        ax.add_patch(bnd_ell)
-
-    subtitle_parts = ["peak-peel residual"]
-    if reference_image is not None:
-        subtitle_parts.append("intensity scale = raw 1–99.5 pctl")
-    if boundary is not None:
-        fe = f"{float(peak_peel_y_edge_frac):g}"
-        if peak_peel_y_edges_only:
-            subtitle_parts.append(
-                f"magenta = y-edge bands (|y-cy|/b>=1-F, F={fe}); round-2 filter ON"
-            )
-        else:
-            subtitle_parts.append(
-                f"magenta = y-edge bands (F={fe}); round-2 uses full frame"
-            )
-    ax.set_title(f"{title}  [{'; '.join(subtitle_parts)}]", fontsize=13)
-    ax.set_xlabel("x (pixel)")
-    ax.set_ylabel("y (pixel)")
-    fig.tight_layout()
-    if output_path:
-        fig.savefig(output_path, dpi=200)
-        print(f"[Saved residual] {output_path}")
-    if show:
-        plt.show()
-    plt.close(fig)
 
 
 def print_summary(ions):
