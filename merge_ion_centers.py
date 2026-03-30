@@ -516,6 +516,13 @@ def main() -> None:
         help="列方向 COM 半窗（像素）",
     )
     parser.add_argument(
+        "--second-layer-com-neighbor-cols",
+        type=int,
+        default=1,
+        metavar="N",
+        help="第二层 y 质心在峰值列两侧各并入 N 列（0=仅峰值列；默认 1 与 second_layer_ion_peaks 一致）",
+    )
+    parser.add_argument(
         "--second-layer-line-first",
         type=int,
         default=1,
@@ -661,6 +668,7 @@ def main() -> None:
         )
 
         halfwin = int(args.second_layer_y_halfwin)
+        com_n = max(0, int(args.second_layer_com_neighbor_cols))
         ppf = float(args.second_layer_prof_prominence_frac)
         ppd = int(args.second_layer_prof_peak_distance)
 
@@ -679,6 +687,7 @@ def main() -> None:
                 prof_prominence_frac=ppf,
                 prof_peak_distance=ppd,
                 source="second_layer_L1",
+                com_neighbor_cols=com_n,
             )
             ions_l2 = ions_from_second_layer_row(
                 im, y0_2, px_lo, px_hi,
@@ -686,6 +695,7 @@ def main() -> None:
                 prof_prominence_frac=ppf,
                 prof_peak_distance=ppd,
                 source="second_layer_L2",
+                com_neighbor_cols=com_n,
             )
             n_before = len(merged)
             merged = replace_merge_in_xy_slab(

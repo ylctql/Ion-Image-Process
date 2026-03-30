@@ -11,9 +11,25 @@
 
 历史脚本仍可使用 ``from ion_detection import detect_ions``。
 """
-from ion_detect import detect_ions, print_summary, visualize
+from ion_detect import (
+    bgsub_binarize,
+    bgsub_binarize_u8,
+    detect_ions,
+    print_summary,
+    visualize,
+    visualize_bgsub,
+    visualize_bgsub_binarized,
+)
 
-__all__ = ["detect_ions", "visualize", "print_summary"]
+__all__ = [
+    "detect_ions",
+    "visualize",
+    "visualize_bgsub",
+    "visualize_bgsub_binarized",
+    "bgsub_binarize",
+    "bgsub_binarize_u8",
+    "print_summary",
+]
 
 if __name__ == "__main__":
     from ion_detect.__main__ import main

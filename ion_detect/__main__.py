@@ -1,6 +1,8 @@
 """python -m ion_detect 入口。"""
 import argparse
 import sys
+from typing import Any, cast
+
 import numpy as np
 import time
 from pathlib import Path
@@ -10,6 +12,8 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 from output_paths import (
     OUT_AMP_Y_FIT,
+    OUT_BGSUB_BIN_IMGS,
+    OUT_BGSUB_IMGS,
     OUT_ION_DETECT_IMGS,
     OUT_ION_POS,
     OUT_RESIDUAL_IMGS,
@@ -17,7 +21,13 @@ from output_paths import (
 
 from .cli_helpers import resolve_indices
 from .pipeline import detect_ions
-from .viz import print_summary, visualize, visualize_peel_residual
+from .viz import (
+    print_summary,
+    visualize,
+    visualize_bgsub,
+    visualize_bgsub_binarized,
+    visualize_peel_residual,
+)
 
 
 _PEEL_UNSET = object()  # --peak-peel 未传入
@@ -140,6 +150,38 @@ def main():
         help="第二轮峰振幅须 ≥ Q×首轮振幅中位数 (抑制弱伪峰)。",
     )
     parser.add_argument(
+        "--save-bgsub-img",
+        action="store_true",
+        help="保存减高斯背景后的 signal 图 (bgsub, 与 detect_ions 首轮检测用图一致; 可与 --peak-peel 同用)。",
+    )
+    parser.add_argument(
+        "--bgsub-img-dir",
+        type=Path,
+        default=None,
+        help="bgsub 图保存目录，默认 outputs/bgsub_imgs。",
+    )
+    parser.add_argument(
+        "--bgsub-binarize-threshold",
+        type=float,
+        default=None,
+        metavar="T",
+        help=(
+            "对减高斯背景后的 bgsub (与 detect_ions 首轮 signal 一致) 按阈值 T 二值化，"
+            "并保存两张独立 PNG：*_bgsub.png 与 *_mask.png。不指定则不生成。"
+        ),
+    )
+    parser.add_argument(
+        "--bgsub-binarize-strict",
+        action="store_true",
+        help="与 --bgsub-binarize-threshold 合用：前景为 bgsub > T（不含等于）。",
+    )
+    parser.add_argument(
+        "--bgsub-binarize-dir",
+        type=Path,
+        default=None,
+        help="二值化输出目录（两张图），默认 outputs/bgsub_binarize_imgs。",
+    )
+    parser.add_argument(
         "--save-residual-img",
         action="store_true",
         help="保存 peak-peel 残差图 (须配合 --peak-peel; 首轮无离子时不生成)。",
@@ -154,7 +196,7 @@ def main():
         "--show",
         action="store_true",
         help=(
-            "弹窗显示检测图与（若有）残差图；关闭当前窗口后继续下一帧。"
+            "弹窗显示检测图与（若有）bgsub / 二值化 / 残差图；关闭当前窗口后继续下一帧。"
             "仍会保存 PNG（与默认一致）。"
         ),
     )
@@ -172,6 +214,8 @@ def main():
     out_dir = OUT_ION_DETECT_IMGS
     out_dir.mkdir(parents=True, exist_ok=True)
     residual_dir = args.residual_img_dir or OUT_RESIDUAL_IMGS
+    bgsub_dir = args.bgsub_img_dir or OUT_BGSUB_IMGS
+    bgsub_bin_dir = args.bgsub_binarize_dir or OUT_BGSUB_BIN_IMGS
     pos_dir = args.pos_dir or OUT_ION_POS
     default_amp_coef_path = OUT_AMP_Y_FIT / "amp_vs_y_coef_10.npy"
     amp_coef_path = args.amp_coef_path or default_amp_coef_path
@@ -187,6 +231,11 @@ def main():
     if args.save_residual_img and not peak_peel:
         print("警告: --save-residual-img 已忽略 (需同时使用 --peak-peel)。")
     want_residual = bool(args.save_residual_img and peak_peel)
+    want_bgsub_bin = args.bgsub_binarize_threshold is not None
+    if args.bgsub_binarize_strict and not want_bgsub_bin:
+        print("警告: --bgsub-binarize-strict 已忽略 (需同时指定 --bgsub-binarize-threshold)。")
+    want_bgsub_save = bool(args.save_bgsub_img)
+    return_bgsub = want_bgsub_save or want_bgsub_bin
 
     detect_kw = dict(
         use_y_threshold_comp=args.use_y_thresh_comp,
@@ -213,13 +262,25 @@ def main():
 
         print("正在检测离子...")
         t0 = time.perf_counter()
-        if want_residual:
-            ions, boundary, peel_residual = detect_ions(
-                image, **detect_kw, return_peel_residual=True,
-            )
+        _out = cast(
+            Any,
+            detect_ions(
+                image,
+                **detect_kw,
+                return_peel_residual=want_residual,
+                return_bgsub=return_bgsub,
+            ),
+        )
+        peel_residual = None
+        bgsub_map = None
+        if want_residual and return_bgsub:
+            ions, boundary, peel_residual, bgsub_map = _out
+        elif want_residual:
+            ions, boundary, peel_residual = _out
+        elif return_bgsub:
+            ions, boundary, bgsub_map = _out
         else:
-            ions, boundary = detect_ions(image, **detect_kw)
-            peel_residual = None
+            ions, boundary = _out
         elapsed = time.perf_counter() - t0
         print(f"检测耗时: {elapsed:.2f} 秒")
         if boundary:
@@ -247,6 +308,36 @@ def main():
             boundary=boundary,
             show=args.show,
         )
+
+        if want_bgsub_save and bgsub_map is not None:
+            bgsub_dir.mkdir(parents=True, exist_ok=True)
+            bgsub_path = bgsub_dir / f"ion_bgsub_{idx:04d}.png"
+            visualize_bgsub(
+                bgsub_map,
+                ions,
+                n_sigma=2.0,
+                title=f"[{idx:04d}] {target.name}",
+                output_path=bgsub_path,
+                boundary=boundary,
+                show=args.show,
+            )
+
+        if want_bgsub_bin and bgsub_map is not None:
+            bgsub_bin_dir.mkdir(parents=True, exist_ok=True)
+            thr = float(args.bgsub_binarize_threshold)
+            thr_fn = f"{thr:g}".replace(".", "p").replace("-", "m")
+            bin_path = bgsub_bin_dir / f"ion_bgsub_binary_{idx:04d}_thr{thr_fn}.png"
+            visualize_bgsub_binarized(
+                bgsub_map,
+                thr,
+                ions,
+                n_sigma=2.0,
+                title=f"[{idx:04d}] {target.name}",
+                output_path=bin_path,
+                boundary=boundary,
+                show=args.show,
+                ge=not args.bgsub_binarize_strict,
+            )
 
         if want_residual:
             if peel_residual is None:

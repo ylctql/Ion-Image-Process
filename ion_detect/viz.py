@@ -1,12 +1,16 @@
 """Visualization and console summaries for detection output."""
+from pathlib import Path
+
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 
+from .binarize import bgsub_binarize
 from .peel import y_edge_band_thresholds
 
 
-_VIS_ASPECT = "auto"
+# 与像素坐标一致：x/y 单位同为像素，作图时保持正方形像素（勿用 auto 拉扁椭圆）
+_VIS_ASPECT = "equal"
 
 
 def _plot_weighted_r2_panel(ax, image, ions, boundary, n_sigma):
@@ -134,6 +138,153 @@ def visualize(image, ions, n_sigma=2.0, title="", output_path=None,
     if show:
         plt.show()
     plt.close(fig)
+
+
+def visualize_bgsub(
+    bgsub,
+    ions,
+    n_sigma=2.0,
+    title="",
+    output_path=None,
+    boundary=None,
+    show=False,
+):
+    """``image - Gaussian background`` (与 ``detect_ions`` 中首轮 ``signal`` 一致).
+
+    有符号量, 使用关于 0 对称的显示范围 (基于 |signal| 的高分位), diverging colormap。
+    椭圆与晶格边界与 ``visualize`` 顶栏一致。
+    """
+    fig, ax = plt.subplots(1, 1, figsize=(14, 8))
+    z = np.asarray(bgsub, dtype=np.float64)
+    ap = float(np.percentile(np.abs(z), 99.5))
+    if not np.isfinite(ap) or ap < 1e-18:
+        ap = max(float(np.nanmax(np.abs(z))) if z.size else 0.0, 1e-12)
+    im = ax.imshow(z, cmap="RdBu_r", aspect=_VIS_ASPECT, vmin=-ap, vmax=ap)
+    plt.colorbar(im, ax=ax, fraction=0.025, pad=0.02, label="raw − Gaussian bg")
+    for ion in ions:
+        ell = Ellipse(
+            xy=(ion["x0"], ion["y0"]),
+            width=2 * n_sigma * ion["sigma_minor"],
+            height=2 * n_sigma * ion["sigma_major"],
+            angle=ion["theta_deg"],
+            edgecolor="lime", facecolor="none", linewidth=0.45, alpha=0.92,
+        )
+        ax.add_patch(ell)
+    if boundary is not None:
+        bcx, bcy, ba, bb = boundary
+        bnd_ell = Ellipse(
+            xy=(bcx, bcy), width=2 * ba, height=2 * bb, angle=0,
+            edgecolor="cyan", facecolor="none",
+            linewidth=1.2, linestyle="--", alpha=0.9,
+        )
+        ax.add_patch(bnd_ell)
+    ax.set_title(
+        f"{title}   [bgsub / matched-filter input map; {len(ions)} ions; "
+        f"ellipse = {n_sigma} sigma; |·| 99.5% scale ≈ {ap:.3g}]",
+        fontsize=12,
+    )
+    ax.set_xlabel("x (pixel)")
+    ax.set_ylabel("y (pixel)")
+    fig.tight_layout()
+    if output_path:
+        fig.savefig(output_path, dpi=200)
+        print(f"[Saved bgsub] {output_path}")
+    if show:
+        plt.show()
+    plt.close(fig)
+
+
+def visualize_bgsub_binarized(
+    bgsub,
+    threshold: float,
+    ions,
+    n_sigma: float = 2.0,
+    title: str = "",
+    output_path=None,
+    boundary=None,
+    show: bool = False,
+    *,
+    ge: bool = True,
+):
+    """减背景 ``bgsub`` 按阈值二值化：输出 **两张独立 figure**（先 bgsub，再二值掩膜）。
+
+    若给定 ``output_path``（如 ``…/ion_bgsub_binary_0000_thr50.png``），则保存为
+    ``…_bgsub.png`` 与 ``…_mask.png``（在同目录下、同名加后缀）。
+
+    ``threshold`` 与 :func:`~ion_detect.binarize.bgsub_binarize` 一致（默认前景 ``>= threshold``）。
+    """
+    z = np.asarray(bgsub, dtype=np.float64)
+    mask = bgsub_binarize(z, threshold, ge=ge)
+    n_fg = int(np.count_nonzero(mask))
+    n_pix = int(mask.size)
+    frac = (100.0 * n_fg / n_pix) if n_pix else 0.0
+    rule = "≥" if ge else ">"
+    ap = float(np.percentile(np.abs(z), 99.5))
+    if not np.isfinite(ap) or ap < 1e-18:
+        ap = max(float(np.nanmax(np.abs(z))) if z.size else 0.0, 1e-12)
+
+    def _overlays(ax):
+        for ion in ions:
+            ax.add_patch(
+                Ellipse(
+                    xy=(ion["x0"], ion["y0"]),
+                    width=2 * n_sigma * ion["sigma_minor"],
+                    height=2 * n_sigma * ion["sigma_major"],
+                    angle=ion["theta_deg"],
+                    edgecolor="lime", facecolor="none", linewidth=0.45, alpha=0.92,
+                ),
+            )
+        if boundary is not None:
+            bcx, bcy, ba, bb = boundary
+            ax.add_patch(
+                Ellipse(
+                    xy=(bcx, bcy), width=2 * ba, height=2 * bb, angle=0,
+                    edgecolor="cyan", facecolor="none",
+                    linewidth=1.2, linestyle="--", alpha=0.9,
+                ),
+            )
+
+    path_bgsub = path_mask = None
+    if output_path is not None:
+        base = Path(output_path)
+        path_bgsub = base.with_name(f"{base.stem}_bgsub{base.suffix}")
+        path_mask = base.with_name(f"{base.stem}_mask{base.suffix}")
+
+    # Figure 1: bgsub
+    fig0, ax0 = plt.subplots(1, 1, figsize=(14, 8), constrained_layout=True)
+    im0 = ax0.imshow(z, cmap="RdBu_r", aspect=_VIS_ASPECT, vmin=-ap, vmax=ap)
+    plt.colorbar(im0, ax=ax0, fraction=0.046, pad=0.02, label="raw − Gaussian bg")
+    _overlays(ax0)
+    ax0.set_title(
+        f"{title}   [bgsub; binarize {rule} {threshold:g}]",
+        fontsize=12,
+    )
+    ax0.set_xlabel("x (pixel)")
+    ax0.set_ylabel("y (pixel)")
+    if path_bgsub is not None:
+        fig0.savefig(path_bgsub, dpi=200, bbox_inches="tight")
+        print(f"[Saved bgsub (binarize context)] {path_bgsub}")
+    if show:
+        plt.show()
+    plt.close(fig0)
+
+    # Figure 2: binary mask
+    fig1, ax1 = plt.subplots(1, 1, figsize=(14, 8), constrained_layout=True)
+    im1 = ax1.imshow(mask.astype(np.float64), cmap="gray", aspect=_VIS_ASPECT, vmin=0.0, vmax=1.0)
+    plt.colorbar(im1, ax=ax1, fraction=0.046, pad=0.02, label="foreground=1")
+    _overlays(ax1)
+    ax1.set_title(
+        f"{title}   [binary bgsub {rule} {threshold:g}  |  fg {n_fg} px ({frac:.2f}%)]",
+        fontsize=12,
+    )
+    ax1.set_xlabel("x (pixel)")
+    ax1.set_ylabel("y (pixel)")
+    if path_mask is not None:
+        fig1.savefig(path_mask, dpi=200, bbox_inches="tight")
+        print(f"[Saved bgsub binary mask] {path_mask}")
+    if show:
+        plt.show()
+    plt.close(fig1)
 
 
 def visualize_peel_residual(

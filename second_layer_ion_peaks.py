@@ -1,7 +1,7 @@
 """
 基于 merge_ion_centers 的合并中心：对 y 频数直方图取选定峰（默认第 2 个，``--line-id``）所在行 y0，
-将 I(y0-1)+I(y0)+I(y0+1) 沿 x 求和找峰得到 x，再在每列 y0±3 行做 COM 得精确 y；
-在离子图上画出三行剖面线、拟合窗口边界及识别坐标。
+将 I(y0-1)+I(y0)+I(y0+1) 沿 x 求和找峰得到 x，再在 x±N 列、y0±halfwin 行上做 COM 得精确 y（默认 N=1 含左右邻列）；
+在离子图上画出三行剖面线、质心窗口边界及识别坐标（y 为列内亮度质心，非峰拟合）。
 
 ``--line-id`` 为按峰位 y 从小到大排序后的峰序号（从 1 计数）。输出文件名含 ``line{N}`` 后缀。
 用法与 merge_ion_centers.py 的检测/合并参数对齐，便于复现实验。
@@ -158,10 +158,11 @@ def _plot_peak_detection_figure(
     xs: np.ndarray,
     prof: np.ndarray,
     peaks_ix: np.ndarray,
-    ion_xy: list[tuple[int, float, float, int, int]],
+    ion_xy: list[tuple[int, float, float, int, int, int, int]],
     profile_x_range: tuple[float, float],
     prof_prominence_frac: float,
     halfwin: int,
+    com_neighbor_cols: int,
     out_path: Path,
     show: bool,
 ) -> None:
@@ -177,21 +178,22 @@ def _plot_peak_detection_figure(
     ax.set_title(
         f"Peak detection | frame [{fid:04d}] {stem} | line-id={line_id} → y0={yr0} | "
         f"x in [{profile_x_range[0]:.0f}, {profile_x_range[1]:.0f}] | "
-        f"prominence ≥ {100 * prof_prominence_frac:.0f}% of profile max | COM window ±{halfwin} px rows",
+        f"prominence ≥ {100 * prof_prominence_frac:.0f}% of profile max | "
+        f"y COM: ±{halfwin} rows × x±{com_neighbor_cols} cols",
     )
     lines_txt = []
     n = 0
-    for x_px, y_fit, _xp, _r0, _r1 in ion_xy:
+    for x_px, y_com, _xp, _r0, _r1, _xl, _xh in ion_xy:
         n += 1
-        if np.isfinite(y_fit):
-            lines_txt.append(f"  #{n}: x={x_px} px, y_COM={y_fit:.3f} px")
+        if np.isfinite(y_com):
+            lines_txt.append(f"  #{n}: x={x_px} px, y_COM={y_com:.3f} px")
         else:
             lines_txt.append(f"  #{n}: x={x_px} px, y_COM=nan")
     table = "\n".join(lines_txt) if lines_txt else "  (no peaks)"
     ax.text(
         0.02,
         0.98,
-        "Ion coordinates (from column COM):\n" + table,
+        f"Ion coordinates (y COM, x±{com_neighbor_cols} cols × ±{halfwin} rows):\n" + table,
         transform=ax.transAxes,
         fontsize=8,
         verticalalignment="top",
@@ -216,8 +218,9 @@ def _plot_ion_image_figure(
     stem: str,
     yr0: int,
     line_id: int,
-    ion_xy: list[tuple[int, float, float, int, int]],
+    ion_xy: list[tuple[int, float, float, int, int, int, int]],
     halfwin: int,
+    com_neighbor_cols: int,
     out_path: Path,
     show: bool,
 ) -> None:
@@ -240,19 +243,20 @@ def _plot_ion_image_figure(
     ax.plot([], [], color="yellow", ls="-", lw=1.3, label="y0 (center row of sum)")
     ax.plot([], [], color="cyan", ls="--", lw=1.3, label="y0 ± 1 (rows in sum)")
 
-    for x_px, y_fit, _x_plot, r0, r1 in ion_xy:
-        if not np.isfinite(y_fit):
+    for x_px, y_com, _x_plot, r0, r1, x_pl, x_ph in ion_xy:
+        if not np.isfinite(y_com):
             continue
+        rw = float(x_ph - x_pl + 1)
         rect = Rectangle(
-            (x_px - 0.5, r0 - 0.5),
-            1.0,
-            (r1 - r0),
+            (x_pl - 0.5, r0 - 0.5),
+            rw,
+            float(r1 - r0),
             linewidth=1.5,
             edgecolor="lime",
             facecolor="none",
         )
         ax.add_patch(rect)
-        ax.scatter([x_px], [y_fit], c="red", s=55, zorder=7, edgecolors="k", linewidths=0.4, marker="o")
+        ax.scatter([x_px], [y_com], c="red", s=55, zorder=7, edgecolors="k", linewidths=0.4, marker="o")
 
     y_win_lo = yr0 - halfwin - 0.5
     y_win_hi = yr0 + halfwin + 0.5
@@ -266,7 +270,7 @@ def _plot_ion_image_figure(
     ax.set_ylabel("y (pixel)")
     ax.set_title(
         f"Ion image | frame [{fid:04d}] {stem} | line-id={line_id}, y0={yr0} | "
-        f"yellow/cyan: sum rows; orange: ±{halfwin} window; lime: COM column; red: refined (x, y)",
+        f"yellow/cyan: sum rows; orange: ±{halfwin} window; lime: COM patch (x±{com_neighbor_cols}); red: (x_peak, y)",
     )
     ax.legend(loc="upper right", fontsize=9, framealpha=0.92)
     fig.tight_layout()
@@ -280,7 +284,7 @@ def _plot_ion_image_figure(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="合并中心 y 直方图第二峰 → 三行和剖面找 x 峰 → y0±3 COM 得精确 y 并出图",
+        description="合并中心 y 直方图选峰 → 三行和剖面找 x 峰 → 在 x±N 与 y0±halfwin 上 COM 得精确 y 并出图",
     )
     parser.add_argument("indices", nargs="*", default=["0"], help="帧索引（与 merge_ion_centers 相同）")
     parser.add_argument("--data-dir", type=Path, default=PROJECT_ROOT / "20260305_1727")
@@ -334,6 +338,13 @@ def main() -> None:
     )
     parser.add_argument("--prof-peak-distance", type=int, default=4, help="x 向峰最小间距（像素）")
     parser.add_argument("--y-halfwin", type=int, default=3, help="y0 上下各取若干行做 COM（默认 3）")
+    parser.add_argument(
+        "--y-com-neighbor-cols",
+        type=int,
+        default=1,
+        metavar="N",
+        help="y 质心时在峰值列两侧各并入 N 列（0=仅峰值列；默认 1 即 x−1,x,x+1）",
+    )
     parser.add_argument(
         "--line-id",
         type=int,
@@ -413,6 +424,7 @@ def main() -> None:
     print(f"已保存 y 直方图: {hist_png}")
 
     halfwin = int(args.y_halfwin)
+    com_n = max(0, int(args.y_com_neighbor_cols))
     prom_frac = float(args.prof_prominence_frac)
     dist_px = max(1, int(args.prof_peak_distance))
 
@@ -431,11 +443,13 @@ def main() -> None:
             prof, prominence=prom, distance=dist_px,
         )
 
-        ion_xy: list[tuple[int, float, float, int, int]] = []
+        ion_xy: list[tuple[int, float, float, int, int, int, int]] = []
         for ix in peaks_ix:
             x_px = int(xs[ix])
-            y_fit, r0, r1 = com_y_column(image, x_px, yr, halfwin)
-            ion_xy.append((x_px, y_fit, float(xs[ix]), r0, r1))
+            y_com, r0, r1, x_pl, x_ph = com_y_column(
+                image, x_px, yr, halfwin, neighbor_cols=com_n,
+            )
+            ion_xy.append((x_px, y_com, float(xs[ix]), r0, r1, x_pl, x_ph))
 
         stem = Path(target.name).stem
         out_profile = args.out / f"second_layer_profile_{idx:04d}_{fn_line}.png"
@@ -452,6 +466,7 @@ def main() -> None:
             profile_x_range=(px_lo, px_hi),
             prof_prominence_frac=prom_frac,
             halfwin=halfwin,
+            com_neighbor_cols=com_n,
             out_path=out_profile,
             show=args.show,
         )
@@ -463,6 +478,7 @@ def main() -> None:
             line_id=line_id,
             ion_xy=ion_xy,
             halfwin=halfwin,
+            com_neighbor_cols=com_n,
             out_path=out_image,
             show=args.show,
         )

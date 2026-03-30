@@ -27,7 +27,8 @@ def detect_ions(image, bg_sigma=(10, 30), peak_size=(5, 9),
                 peak_peel_y_edges_only=False, peak_peel_y_edge_frac=0.25,
                 peak_peel_rel_threshold=None,
                 peak_peel_min_amp_frac=None,
-                return_peel_residual=False):
+                return_peel_residual=False,
+                return_bgsub=False):
     """
     检测离子并拟合椭圆参数。
 
@@ -57,6 +58,8 @@ def detect_ions(image, bg_sigma=(10, 30), peak_size=(5, 9),
         如 0.35 可去掉很弱的剥离伪峰。
     return_peel_residual : bool – 为 True 时额外返回首轮剥离后的残差图 ``image - Σ拟合峰`` (仅当
         ``peak_peel`` 且首轮 ``ions`` 非空时非 None; 否则为 None)。
+    return_bgsub : bool – 为 True 时额外返回首轮 ``image - GaussianBackground`` (与边界估计、
+        拟合所用 ``signal`` 一致; 有符号, 可为负)。
 
     Returns
     -------
@@ -67,8 +70,11 @@ def detect_ions(image, bg_sigma=(10, 30), peak_size=(5, 9),
         theta_deg    – 长轴相对 x 轴的旋转角 (度)
         amplitude    – 高斯峰值强度
 
-    若 ``return_peel_residual`` 为 True, 返回 ``(ions, boundary, peel_residual)``,
-    其中 ``peel_residual`` 为 ndarray 或 None; 否则返回 ``(ions, boundary)``.
+    返回元组长度:
+        - 默认: ``(ions, boundary)``
+        - ``return_peel_residual`` 与 ``return_bgsub`` 仅其一为真: 在末尾追加对应 ndarray
+          (``peel_residual`` 可能为 None)
+        - 二者均为真: ``(ions, boundary, peel_residual, bgsub)``
     """
     img = image.astype(np.float64)
     peel_residual = None
@@ -158,6 +164,10 @@ def detect_ions(image, bg_sigma=(10, 30), peak_size=(5, 9),
             ions2 = [d for d in ions2 if float(d["amplitude"]) >= lo]
         ions = merge_ions_by_distance(ions, ions2, peak_peel_min_sep)
 
+    if return_peel_residual and return_bgsub:
+        return ions, boundary, peel_residual, signal
     if return_peel_residual:
         return ions, boundary, peel_residual
+    if return_bgsub:
+        return ions, boundary, signal
     return ions, boundary

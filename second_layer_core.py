@@ -78,17 +78,28 @@ def com_y_column(
     x_px: int,
     yr0: int,
     halfwin: int,
-) -> tuple[float, int, int]:
+    *,
+    neighbor_cols: int = 0,
+) -> tuple[float, int, int, int, int]:
+    """y 向亮度质心：在 y∈[yr0−halfwin, yr0+halfwin]、x∈[x_px−n, x_px+n]（截断到图像内）上求 COM。
+
+    返回 ``(y_com, r0, r1, x_lo, x_hi)``；``r0,r1`` 为 y 半窗对应的行切片 ``[r0,r1)``，
+    ``x_lo,x_hi`` 为参与求和的列下标（闭区间）。
+    """
     h, w = im.shape
     x_px = int(np.clip(x_px, 0, w - 1))
+    n = max(0, int(neighbor_cols))
+    x_lo = max(0, x_px - n)
+    x_hi = min(w - 1, x_px + n)
     r0 = max(0, yr0 - halfwin)
     r1 = min(h, yr0 + halfwin + 1)
-    col = np.maximum(im[r0:r1, x_px].astype(np.float64), 0.0)
-    s = float(np.sum(col))
+    patch = np.maximum(im[r0:r1, x_lo : x_hi + 1].astype(np.float64), 0.0)
+    s = float(np.sum(patch))
     if s <= 0.0:
-        return float("nan"), r0, r1
-    y_idx = np.arange(r0, r1, dtype=np.float64)
-    return float(np.sum(y_idx * col) / s), r0, r1
+        return float("nan"), r0, r1, x_lo, x_hi
+    y_idx = np.arange(r0, r1, dtype=np.float64)[:, np.newaxis]
+    y_com = float(np.sum(y_idx * patch) / s)
+    return y_com, r0, r1, x_lo, x_hi
 
 
 def ions_from_second_layer_row(
@@ -101,8 +112,9 @@ def ions_from_second_layer_row(
     prof_prominence_frac: float,
     prof_peak_distance: int,
     source: str,
+    com_neighbor_cols: int = 0,
 ) -> list[dict[str, Any]]:
-    """One horizontal layer: sum I(y0-1:y0+1,x), find x peaks, COM y in column within ±halfwin."""
+    """One horizontal layer: sum I(y0-1:y0+1,x), find x peaks, COM y in ±halfwin rows × (x±com_neighbor_cols) cols."""
     h, w = image.shape
     im = np.asarray(image, dtype=np.float64)
     yr = int(np.clip(int(y0), 0, h - 1))
@@ -121,10 +133,12 @@ def ions_from_second_layer_row(
     out: list[dict[str, Any]] = []
     for ix in peaks_ix:
         x_px = int(xs[ix])
-        y_fit, _r0, _r1 = com_y_column(im, x_px, yr, int(halfwin))
-        if not np.isfinite(y_fit):
+        y_com, _r0, _r1, _xl, _xh = com_y_column(
+            im, x_px, yr, int(halfwin), neighbor_cols=int(com_neighbor_cols),
+        )
+        if not np.isfinite(y_com):
             continue
-        out.append({"x0": float(x_px), "y0": float(y_fit), "source": source})
+        out.append({"x0": float(x_px), "y0": float(y_com), "source": source})
     return out
 
 

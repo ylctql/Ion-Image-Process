@@ -6,10 +6,13 @@
 - 交互式浏览与手动触发检测（`gallery.py`）
 - 形变与亮度随 `y` 方向统计拟合（`stretching_analysis.py`）
 - 固定 **x** 条带内按行积分，观察 **y** 向分层/条纹（`y_layer_profile.py`）
-- 中心区域 `ion_detect` 与上下缘条带 COM **合并离子中心**（`merge_ion_centers.py`）
+- 中心区域 `ion_detect` 与上下缘条带 COM **合并离子中心**（`merge_ion_centers.py`）；可选 **第二层 y 直方图峰行** 条带内替换（`--second-layer-slab`，算法见 `second_layer_core.py`）
+- **第二层诊断**：合并中心 y 直方图选峰 → 三行 x 剖面寻峰 → 列向 COM（`second_layer_ion_peaks.py`，默认输出 `outputs/second_layer_peaks/`）
+- **批量**每帧独立执行与 `merge_ion_centers --second-layer-slab` 等价的 slab 流程，并汇总图（`batch_merge_second_layer_slab.py`）；从运行日志解析每帧离子数并画直方图（`plot_batch_log_ion_histogram.py`）
 - 多构型距离统计与直方图（`dist.py`）
 - 数据集整体统计与示例图（`project_info.py`）
 - 指定若干帧导出矩阵 PNG（`vis_selected_npy.py`）
+- 可选：减背景图导出与阈值二值化 PNG（`python -m ion_detect` 的 `--save-bgsub-img` / `--bgsub-binarize-threshold`）；Notebook 统计示例（`statistic.ipynb`）
 
 检测流程概览：**减背景 →（可选）匹配滤波 → 局部极大与阈值 → 2D 高斯拟合（可选近邻联合双峰）→（可选）峰值剥离第二轮**。剥离轮可限制在晶格椭圆 **y 向边缘带**，并单独提高阈值或振幅门槛，以减轻重叠区漏检与中间区域假小峰。
 
@@ -34,6 +37,8 @@ pip install numpy scipy matplotlib
 - 输入图像：`20260305_1727/*.npy`
 - **生成结果统一在 `outputs/` 下**（路径常量见根目录 `output_paths.py`，便于各脚本与 `.gitignore` 一致）：
   - `outputs/ion_detect_imgs/`：离子椭圆叠加 PNG（`python -m ion_detect` 默认）
+  - `outputs/bgsub_imgs/`：减高斯背景后的 signal 图（`--save-bgsub-img`）
+  - `outputs/bgsub_binarize_imgs/`：bgsub 与二值 mask 成对 PNG（`--bgsub-binarize-threshold`）
   - `outputs/IonPos/`：离子中心 `N×2` 的 `.npy`
   - `outputs/amp_y_fit/`：y 向振幅拟合系数等（如 `amp_vs_y_coef_10.npy`）
   - `outputs/stretch_analysis/`：形变分析图
@@ -43,6 +48,8 @@ pip install numpy scipy matplotlib
   - `outputs/edge_strip_profiles/`：`edge_strip_profile.py` 默认 PNG（常量 `OUT_EDGE_STRIP`）
   - `outputs/y_layer_profiles/`：`y_layer_profile.py` 默认 PNG（常量 `OUT_Y_LAYER_PROFILE`）
   - `outputs/ion_centers_merged/`：`merge_ion_centers.py` 默认 PNG（常量 `OUT_ION_CENTERS_MERGED`）
+  - `outputs/second_layer_peaks/`：`second_layer_ion_peaks.py` 默认（直方图、剖面图、叠图；常量 `OUT_SECOND_LAYER_PEAKS`）
+  - `outputs/batch_merge_slab_<时间戳>/`：`batch_merge_second_layer_slab.py` 在未指定 `--out` 时的默认根目录（内含每组子目录与 `summary/`）
 
 > `20260305_1727` 中每个 `npy` 被视为一帧图像（若为 3D 会按脚本逻辑处理）。
 
@@ -60,12 +67,14 @@ pip install numpy scipy matplotlib
 
 ```python
 from ion_detect import detect_ions, visualize, print_summary
+# 可选：bgsub / 二值化可视化
+from ion_detect import visualize_bgsub, visualize_bgsub_binarized, bgsub_binarize
 ```
 
 历史脚本也可继续使用：
 
 ```python
-from ion_detection import detect_ions  # 等价于从 ion_detect 再导出
+from ion_detection import detect_ions, visualize_bgsub, bgsub_binarize  # 兼容入口再导出
 ```
 
 ### 3.1 命令行基础用法
@@ -104,8 +113,14 @@ python -m ion_detect 0 5 -1 "::3,0:10"
 | `--peak-peel-min-amp-frac` | 未传 | 不设则二轮不按振幅比例过滤 |
 | `--save-residual-img` | 关闭 | 须同时 `--peak-peel` |
 | `--residual-img-dir` | `outputs/residual_imgs` | 未传时使用 |
+| `--save-bgsub-img` | 关闭 | 保存与首轮检测一致的减背景 signal PNG |
+| `--bgsub-img-dir` | `outputs/bgsub_imgs` | 未传时使用 |
+| `--bgsub-binarize-threshold T` | 未设置 | 指定则对 bgsub 二值化并各保存 `*_bgsub.png` 与带 mask 的 PNG |
+| `--bgsub-binarize-strict` | 关闭 | 与上一项合用：前景为 `>` 而非 `>=` |
+| `--bgsub-binarize-dir` | `outputs/bgsub_binarize_imgs` | 未传时使用 |
+| `--show` | 关闭 | 弹窗显示主图及（若有）bgsub / 二值化 / 残差；多帧时每帧关窗后继续 |
 
-**未单独暴露给 CLI、但 `detect_ions` 使用的默认**（见 `ion_detect/pipeline.py`）：`rel_threshold=0.025`，`bg_sigma=(10, 30)`，`peak_size=(5, 9)`，`fit_hw=(3, 4)`（半窗口），`sigma_range=(0.3, 3.5)`，`refine=True`，峰值剥离时 `peak_peel_margin_sigma=4.5`。需在代码中调用 `detect_ions(...)` 才能改这些量。
+**未单独暴露给 CLI、但 `detect_ions` 使用的默认**（见 `ion_detect/pipeline.py`）：`rel_threshold=0.025`，`bg_sigma=(10, 30)`，`peak_size=(5, 9)`，`fit_hw=(3, 4)`（半窗口），`sigma_range=(0.3, 3.5)`，`refine=True`，峰值剥离时 `peak_peel_margin_sigma=4.5`。需在代码中调用 `detect_ions(...)` 才能改这些量。若在代码中需要首轮减背景图，可设 `return_bgsub=True`（返回值末尾追加与 CLI `--save-bgsub-img` 相同量纲的 `bgsub`）。
 
 ### 3.2 保存离子中心
 
@@ -174,7 +189,7 @@ python -m ion_detect 0 --peak-peel edge ^
   --peak-peel-min-amp-frac 0.35
 ```
 
-常用参数（默认值亦可查 **§3.1.1**）：
+常用参数（默认值亦可查 **3.1.1** 节表格）：
 
 | 选项 | 含义 | 默认 |
 |------|------|------|
@@ -240,7 +255,7 @@ python edge_strip_profile.py ::20 --out outputs/edge_strip_profiles
 
 ### 3.8 合并离子中心（`merge_ion_centers.py`）
 
-在 **`detect_ions(..., fix_theta_zero=True)`** 与 **§3.7** 同一套外缘条带几何之间做规则合并，输出带图例的单张 PNG（灰度图、晶格边界椭圆、上下缘分界线、`edge-x-range` 竖线、各中心点）。
+在 **`detect_ions(..., fix_theta_zero=True)`** 与 **3.7 节**（外缘条带）同一套几何之间做规则合并，输出带图例的单张 PNG（灰度图、晶格边界椭圆、上下缘分界线、`edge-x-range` 竖线、各中心点）。
 
 **区域规则（与实现一致）**
 
@@ -263,8 +278,8 @@ python merge_ion_centers.py ::10 --out outputs/ion_centers_merged
 |------|------|------|
 | 位置参数 `indices` | 与 `python -m ion_detect` 相同 numpy 风格切片并集 | `0` |
 | `--edge-x-range X0 X1` | 上下缘「条带优先」的 x 闭区间；外侧外缘行仍只用 detect | `250 750` |
-| `--y-edge-frac F` | 外缘条带几何 F（同 §3.7 `--y-edge-frac`） | `0.25` |
-| `--y-fit-frac Ff` | 列 y 向 COM 采样条带宽度（同 §3.7） | `0.35` |
+| `--y-edge-frac F` | 外缘条带几何 F（同 3.7 节 `--y-edge-frac`） | `0.25` |
+| `--y-fit-frac Ff` | 列 y 向 COM 采样条带宽度（同 3.7 节） | `0.35` |
 | `--peak-dist D` | 条带 1D 剖面上辅助峰最小间距（像素） | `5` |
 | `--col-metric` | `sum` / `mean` / `max` | `mean` |
 | `--strip-center-mode` | `com` / `com_fit` / `fit` | `com` |
@@ -276,7 +291,21 @@ python merge_ion_centers.py ::10 --out outputs/ion_centers_merged
 | `--show` | 弹窗显示（仍会写 PNG） | 关 |
 | `--data-dir` / `--out` | `.npy` 目录；PNG 目录 | `20260305_1727`；`outputs/ion_centers_merged` |
 
-核心函数：`merge_centers_hybrid`、`fuse_detect_strip_by_distance`（见脚本内文档字符串）。
+**可选 `--second-layer-slab`**：在由「第一 / 第二 / 第三个 y 直方图峰」确定的水平条带内，丢弃原 merge 结果并改用第二层行寻峰（与 `second_layer_core` 一致）；可与 **`--profile-x-range`**（默认未指定时为 `300–600`，与 `merge` 的 `--edge-x-range` 默认 `250–750` 独立）及下列参数联用。多帧一次调用时，y 直方图为**所选帧合并中心**的并集；若需**每帧单独**直方图与 slab，请用 `batch_merge_second_layer_slab.py`。
+
+| 选项 | 含义 | 默认 |
+|------|------|------|
+| `--second-layer-slab` | 启用条带内 second-layer 替换及与近邻的 `ion-dist` 融合（`source=fused_second_layer`） | 关 |
+| `--profile-x-range X0 X1` | 第二层 x 剖面与替换条带的列范围（像素） | `300–600`（未传时） |
+| `--second-layer-hist-prominence` | 合并中心 y 直方图 `find_peaks` 的 prominence | `5`（独立脚本 `second_layer_ion_peaks` 默认 `10`） |
+| `--second-layer-prof-prominence-frac` | x 剖面 prominence = 该比例 × 剖面最大值 | `0.08` |
+| `--second-layer-prof-peak-distance` | x 向峰最小间距（像素） | `4` |
+| `--second-layer-y-halfwin` | 列向 COM 的 y 半窗（像素） | `3` |
+| `--second-layer-com-neighbor-cols N` | COM 时在峰列两侧各并 N 列 | `1` |
+| `--second-layer-line-first` / `-second` / `-third` | y 直方图峰序号（1 起，按峰位 y 排序）；第二与第三峰 bin 中心的中点（减 `--second-layer-y-cut-pad`）为替换条带上界 | `1` / `2` / `3` |
+| `--second-layer-y-cut-pad` | 上界在中点基础上再减去的像素（略大则更保守） | `1` |
+
+核心函数：`merge_centers_hybrid`、`fuse_detect_strip_by_distance`（见脚本内文档字符串）；第二层几何与替换见 `second_layer_core.py`。
 
 ### 3.9 y 向分层轮廓（`y_layer_profile.py`）
 
@@ -317,7 +346,36 @@ python y_layer_profile.py 0 --show
 | `ion_detect.edge_strip_profile_viz` | 条带总览图 `plot_edge_strip_dashboard`、逐列交互 `show_peak_column_gallery` |
 | `ion_detect.viz` | `visualize`、`print_summary` |
 | `ion_detect.cli_helpers` | 命令行索引解析 |
-| `output_paths`（根目录模块） | `outputs/` 下 `ion_detect_imgs`、`IonPos`、`amp_y_fit`、`edge_strip_profiles`、`y_layer_profiles`、`ion_centers_merged` 等默认路径 |
+| `ion_detect.binarize` | `bgsub_binarize` / `bgsub_binarize_u8`（与 `detect_ions` 首轮 signal 同量纲） |
+| `second_layer_core`（根目录模块） | y 直方图选峰、三行 x 剖面、列 COM、`ions_from_second_layer_row`、条带替换等 |
+| `output_paths`（根目录模块） | `outputs/` 下 `ion_detect_imgs`、`IonPos`、`amp_y_fit`、`bgsub_imgs`、`bgsub_binarize_imgs`、`edge_strip_profiles`、`y_layer_profiles`、`ion_centers_merged`、`second_layer_peaks`、`residual_imgs` 等默认路径 |
+
+### 3.11 第二层 y 行诊断（`second_layer_ion_peaks.py`）
+
+先按与 `merge_ion_centers.py` 相同的检测/条带/合并参数，对所选帧逐帧得到合并中心，再**将所有帧的中心合并为一点集**，在 **y 频数直方图** 上按 `--line-id`（默认 2，即第二峰）取 bin，得到行 `y0`；在 **`--profile-x-range`**（默认与 `--edge-x-range` 相同，脚本默认 `300–600`）上对 `I(y0-1)+I(y0)+I(y0+1)` 做 x 剖面，`find_peaks` 得各列 `x`，再在 `y0±halfwin` 与 `x±N` 列上求 **亮度质心** 得精细 `y`。输出默认目录见 `outputs/second_layer_peaks/`：全样本 y 直方图（标出所选峰）、每帧剖面图与离子叠图。详情见文件头说明与 `python second_layer_ion_peaks.py -h`。
+
+```bash
+python second_layer_ion_peaks.py 0 --line-id 2 --add-neighbor-x
+python second_layer_ion_peaks.py ::10 --hist-prominence 10 --out outputs/second_layer_peaks
+```
+
+### 3.12 批量 second-layer-slab（`batch_merge_second_layer_slab.py`）
+
+对单目录或 `--batch-root` 下多子目录批量运行：对**每一帧**单独用该帧的合并中心建 y 直方图并完成 slab 替换（与 `merge_ion_centers.py 0:997 --second-layer-slab` **一次**调用时「多帧 y 合并成一张直方图」**不同**）。默认索引 `0:997`、`--data-dir` 为项目下 `20260305_1727`；可写日志 `--log-file`，汇总结果在输出根目录的 `summary/`（含 `batch_summary.json` 与汇总图）。用法见脚本文件头与 `python batch_merge_second_layer_slab.py -h`。
+
+```bash
+python batch_merge_second_layer_slab.py --add-neighbor-x
+python batch_merge_second_layer_slab.py 800 --data-dir D:/data/one_run --log-file outputs/my_run.log
+```
+
+### 3.13 批处理日志离子数直方图（`plot_batch_log_ion_histogram.py`）
+
+解析日志中含 `离子数=整数` 的行（与 `batch_merge_second_layer_slab` 输出格式一致），绘制每帧离子数的直方图（坐标轴标签为英文）。
+
+```bash
+python plot_batch_log_ion_histogram.py path/to/batch_run.log
+python plot_batch_log_ion_histogram.py path/to/batch_run.log --out outputs/ion_count_hist.png --bin-width 2
+```
 
 ---
 
@@ -329,7 +387,7 @@ python y_layer_profile.py 0 --show
 python .\gallery.py
 ```
 
-**界面初始默认（与 CLI 对齐，见 §3.1.1）**：`rel=0.025`，`c_fl=0.2`，`mode=even`；复选框 `theta=0` / `Y thresh comp` 默认关，`Matched filt.` / `Two-pass ref.` 默认开；`jY` / `jX` 空表示不启用联合双峰。Y 补偿开启时用 `outputs/amp_y_fit/amp_vs_y_coef_10.npy`。
+**界面初始默认**（与 CLI 对齐，见 **3.1.1** 节）：`rel=0.025`，`c_fl=0.2`，`mode=even`；复选框 `theta=0` / `Y thresh comp` 默认关，`Matched filt.` / `Two-pass ref.` 默认开；`jY` / `jX` 空表示不启用联合双峰。Y 补偿开启时用 `outputs/amp_y_fit/amp_vs_y_coef_10.npy`。
 
 ### 布局与显示
 
@@ -456,7 +514,9 @@ python .\project_info.py
 6. **（可选）y 向边缘列剖面或竖直分层**  
    `python .\edge_strip_profile.py 0` 或 `python .\y_layer_profile.py 0`
 7. **（可选）合并外缘条带与 `ion_detect` 中心并出图**  
-   `python .\merge_ion_centers.py 0 --add-neighbor-x`（见 **§3.8**）
+   `python .\merge_ion_centers.py 0 --add-neighbor-x`（见 **3.8** 节；含 `--second-layer-slab`）
+8. **（可选）第二层 y 行或批量 slab**  
+   `python second_layer_ion_peaks.py 0` 或 `python batch_merge_second_layer_slab.py --add-neighbor-x`（见 **3.11**–**3.13** 节）
 
 ---
 
@@ -469,21 +529,27 @@ python .\project_info.py
 - **固定 θ 拟合**：离子拉长方向与坐标轴一致时可试 `--fix-theta-zero`；一般旋转 PSF 仍用默认旋转高斯。
 - 形变分析时：优先保证样本数量（`-n` 更大），并对比 `quadratic / quartic / gaussian` 的拟合稳定性与 `R^2`。
 - **合并中心**（`merge_ion_centers.py`）：外缘条带域内漏检时可略减 `--peak-dist`；`--ion-dist` 过大可能误并相邻格点；`--edge-x-range` 需覆盖可靠条带列、又尽量不含左右圆角误判区。
+- **第二层 / slab**：`merge` 与独立脚本的 `--second-layer-hist-prominence` 默认不同（5 vs 10），跨脚本对比时注意统一；多帧直方图行为以「单次 `merge_ion_centers`」与「`batch_merge_second_layer_slab` 每帧独立」为两套语义，勿混用。
 
 ---
 
 ## 6. 当前项目文件概览
 
 - `output_paths.py`：统一约定 `outputs/` 下各子目录路径，供脚本默认读写
-- `ion_detect/`：检测核心包（`pipeline`、`gaussian`、`boundary`、`preprocess`、`fitting`、`peel`、`edge_strip`、`edge_strip_profile_analysis`、`edge_strip_profile_viz`、`viz`、`cli_helpers`；`python -m ion_detect` 入口）
-- `ion_detection.py`：兼容层，再导出 `detect_ions` / `visualize` / `print_summary`，并支持 `python ion_detection.py ...` 调用 CLI
+- `ion_detect/`：检测核心包（`pipeline`、`gaussian`、`boundary`、`preprocess`、`fitting`、`peel`、`binarize`、`edge_strip`、`edge_strip_profile_analysis`、`edge_strip_profile_viz`、`viz`、`cli_helpers`；`python -m ion_detect` 入口）
+- `ion_detection.py`：兼容层，再导出 `detect_ions`、`visualize`、`visualize_bgsub`、`visualize_bgsub_binarized`、`bgsub_binarize` / `bgsub_binarize_u8`、`print_summary`，并支持 `python ion_detection.py ...` 调用 CLI
 - `gallery.py`：交互式可视化浏览
 - `stretching_analysis.py`：y 向统计拟合分析
 - `dist.py`：构型距离统计
 - `vis_selected_npy.py`：指定帧矩阵导出 PNG
-- `edge_strip_profile.py`：y 向外缘条带按列聚合与主峰值/多峰示意；分析作图逻辑在 `ion_detect.edge_strip_profile_*`（见 **§3.7**）
-- `merge_ion_centers.py`：`fix-theta-zero` 检测与外缘条带 COM 规则合并、可选 detect–strip 距离融合（见 **§3.8**）
-- `y_layer_profile.py`：固定 x 条带内按行积分，y 向 1D 轮廓（见 **§3.9**）
+- `edge_strip_profile.py`：y 向外缘条带按列聚合与主峰值/多峰示意；分析作图逻辑在 `ion_detect.edge_strip_profile_*`（见 **3.7** 节）
+- `statistic.ipynb`：数据集统计相关 Notebook（按需使用）
+- `merge_ion_centers.py`：`fix-theta-zero` 检测与外缘条带 COM 规则合并、可选 detect–strip 距离融合与 `--second-layer-slab`（见 **3.8** 节）
+- `second_layer_core.py`：第二层 y 直方图 / 三行剖面 / COM / slab 替换（供 `merge_ion_centers`、`second_layer_ion_peaks`、`batch_merge_second_layer_slab` 共用）
+- `second_layer_ion_peaks.py`：独立第二层诊断与出图（见 **3.11** 节）
+- `batch_merge_second_layer_slab.py`：批量每帧 slab（见 **3.12** 节）
+- `plot_batch_log_ion_histogram.py`：从批处理日志画离子数直方图（见 **3.13** 节）
+- `y_layer_profile.py`：固定 x 条带内按行积分，y 向 1D 轮廓（见 **3.9** 节）
 - `project_info.py`：数据集统计与概览图
 - `ion_detect/edge_strip_profile_analysis.py`、`ion_detect/edge_strip_profile_viz.py`：条带列剖面分析与可视化（由 `edge_strip_profile.py` 调用）
 - `.gitignore`：忽略数据、缓存与本地环境文件
