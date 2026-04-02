@@ -38,3 +38,31 @@ def apply_boundary_filter(peak_yx, cx, cy, a, b):
     py = peak_yx[:, 0].astype(np.float64)
     inside = ((px - cx) / a)**2 + ((py - cy) / b)**2 <= 1.0
     return peak_yx[inside]
+
+
+def offset_perpendicular_to_boundary_major_axis(x0, y0, boundary):
+    """拟合中心相对 boundary 椭圆长轴的垂直偏移 (像素), 符号可正可负。
+
+    **约定：长轴恒沿 x**，即过长轴为水平直线 ``y = cy``，垂直方向为 y，
+    偏移取 ``y0 - cy``（与 ``a``、``b`` 相对大小无关）。
+    ``estimate_crystal_boundary`` 仍返回 ``(cx, cy, a, b)``，此处仅用到 ``cy``。
+    ``boundary is None`` 时返回 ``None``。
+    """
+    if boundary is None:
+        return None
+    _cx, cy, _a, _b = boundary
+    return float(y0) - float(cy)
+
+
+def filter_ions_near_boundary_major_axis(ions, boundary, max_abs_offset=3.0):
+    """保留满足 ``|y0 - cy| <= max_abs_offset`` 的离子（长轴视为沿 x，过 ``(·, cy)``）。"""
+    if boundary is None:
+        return []
+    out = []
+    for ion in ions:
+        off = offset_perpendicular_to_boundary_major_axis(
+            ion["x0"], ion["y0"], boundary,
+        )
+        if off is not None and abs(off) <= float(max_abs_offset):
+            out.append(ion)
+    return out

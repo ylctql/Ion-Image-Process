@@ -3,6 +3,7 @@ from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 from matplotlib.patches import Ellipse
 
 from .binarize import bgsub_binarize
@@ -12,19 +13,55 @@ from .binarize import bgsub_binarize
 _VIS_ASPECT = "equal"
 
 
-def _plot_weighted_r2_panel(ax, image, ions, boundary, n_sigma):
+def _major_axis_near_flags_along_x(ions, boundary, tol):
+    """长轴沿 x (y = cy)：|y0 - cy| <= tol 为 True。tol/boundary 无效时返回 None。"""
+    if tol is None or boundary is None:
+        return None
+    cy = float(boundary[1])
+    t = float(tol)
+    return np.array(
+        [abs(float(ion["y0"]) - cy) <= t for ion in ions],
+        dtype=bool,
+    )
+
+
+def _plot_weighted_r2_panel(
+    ax,
+    image,
+    ions,
+    boundary,
+    n_sigma,
+    near_flags=None,
+    *,
+    show_major_axis_hline=False,
+):
     """Panel below main image: weighted R² at each ion location."""
     im = np.asarray(image, dtype=np.float64)
     vmin_i = float(np.percentile(im, 1))
     vmax_i = float(np.percentile(im, 99.5))
     ax.imshow(im, cmap="gray", aspect=_VIS_ASPECT, vmin=vmin_i, vmax=vmax_i, alpha=0.42)
-    for ion in ions:
+    if not ions:
+        ax.set_title("Fit quality (weighted R²): no ions detected", fontsize=12)
+        ax.set_xlabel("x (pixel)")
+        ax.set_ylabel("y (pixel)")
+        return
+    xs = np.array([float(ion["x0"]) for ion in ions], dtype=np.float64)
+    ys = np.array([float(ion["y0"]) for ion in ions], dtype=np.float64)
+    if near_flags is None:
+        near_flags = np.zeros(len(ions), dtype=bool)
+    if show_major_axis_hline and boundary is not None:
+        ax.axhline(
+            float(boundary[1]), color="gold", linestyle="--", linewidth=0.9, alpha=0.85, zorder=4,
+        )
+    for i, ion in enumerate(ions):
+        near = bool(near_flags[i])
+        ec, lw = ("lime", 0.9) if near else ("red", 0.35)
         ell = Ellipse(
             xy=(ion["x0"], ion["y0"]),
             width=2 * n_sigma * ion["sigma_minor"],
             height=2 * n_sigma * ion["sigma_major"],
             angle=ion["theta_deg"],
-            edgecolor="red", facecolor="none", linewidth=0.35, alpha=0.65,
+            edgecolor=ec, facecolor="none", linewidth=lw, alpha=0.72,
         )
         ax.add_patch(ell)
     if boundary is not None:
@@ -35,13 +72,6 @@ def _plot_weighted_r2_panel(ax, image, ions, boundary, n_sigma):
             linewidth=1.0, linestyle="--", alpha=0.85,
         )
         ax.add_patch(bnd_ell)
-    if not ions:
-        ax.set_title("Fit quality (weighted R²): no ions detected", fontsize=12)
-        ax.set_xlabel("x (pixel)")
-        ax.set_ylabel("y (pixel)")
-        return
-    xs = np.array([float(ion["x0"]) for ion in ions], dtype=np.float64)
-    ys = np.array([float(ion["y0"]) for ion in ions], dtype=np.float64)
     vals = np.array(
         [
             float("nan") if ion.get("r2_weighted") is None else float(ion["r2_weighted"])
@@ -51,7 +81,9 @@ def _plot_weighted_r2_panel(ax, image, ions, boundary, n_sigma):
     )
     valid = np.isfinite(vals)
     if not valid.any():
-        ax.scatter(xs, ys, s=28, c="0.7", edgecolors="k", linewidths=0.25, zorder=5)
+        ec = np.where(near_flags, "#FFD700", "k")
+        lw = np.where(near_flags, 2.0, 0.25)
+        ax.scatter(xs, ys, s=28, c="0.7", edgecolors=ec, linewidths=lw, zorder=5)
         ax.set_title("Fit quality (weighted R²): no valid values", fontsize=12)
     else:
         v_ok = vals[valid]
@@ -61,9 +93,12 @@ def _plot_weighted_r2_panel(ax, image, ions, boundary, n_sigma):
         vmax_c = max(1.0, c_hi)
         if vmax_c - vmin_c < 1e-9:
             vmax_c = vmin_c + 1e-6
+        nf_v = near_flags[valid]
+        ec = np.where(nf_v, "#FFD700", "0.15")
+        lw = np.where(nf_v, 2.0, 0.25)
         sc = ax.scatter(
             xs[valid], ys[valid], c=v_ok, cmap="RdYlGn", s=42,
-            vmin=vmin_c, vmax=vmax_c, edgecolors="0.15", linewidths=0.25, zorder=6,
+            vmin=vmin_c, vmax=vmax_c, edgecolors=ec, linewidths=lw, zorder=6,
         )
         plt.colorbar(sc, ax=ax, fraction=0.025, pad=0.02, label="Weighted R²")
         n_bad = int(np.sum(~valid))
@@ -79,7 +114,8 @@ def _plot_weighted_r2_panel(ax, image, ions, boundary, n_sigma):
 
 
 def visualize(image, ions, n_sigma=2.0, title="", output_path=None,
-              boundary=None, show_fit_quality=True, show=False):
+              boundary=None, show_fit_quality=True, show=False, *,
+              near_major_axis_tol=None):
     """
     Draw the frame with fitted ellipses.
 
@@ -88,6 +124,10 @@ def visualize(image, ions, n_sigma=2.0, title="", output_path=None,
     If show_fit_quality is True, add a second panel with weighted R² per ion.
     If show is True, open an interactive window (``plt.show()``); still saves when
     output_path is set.
+
+    near_major_axis_tol
+        若与 ``boundary`` 同时给出，假定长轴沿 x，在图上画 ``y = cy`` 金线，并将
+        ``|y0 - cy| <= tol`` 的离子椭圆改为亮绿加粗，其余保持红色（便于标出长轴邻域离子）。
     """
     height_ratios = [5, 2] if show_fit_quality else [5]
     nrows = len(height_ratios)
@@ -100,16 +140,24 @@ def visualize(image, ions, n_sigma=2.0, title="", output_path=None,
 
     r2_row = 1 if show_fit_quality else None
 
+    near_flags = _major_axis_near_flags_along_x(ions, boundary, near_major_axis_tol)
     ax = axes[0]
     ax.imshow(image, cmap="gray", aspect=_VIS_ASPECT,
               vmin=np.percentile(image, 1), vmax=np.percentile(image, 99.5))
-    for ion in ions:
+    if near_flags is not None:
+        bcy_line = float(boundary[1])
+        ax.axhline(
+            bcy_line, color="gold", linestyle="--", linewidth=1.1, alpha=0.9, zorder=4,
+        )
+    for i, ion in enumerate(ions):
+        near = near_flags[i] if near_flags is not None else False
+        ec, lw = ("lime", 1.2) if near else ("red", 0.4)
         ell = Ellipse(
             xy=(ion["x0"], ion["y0"]),
             width=2 * n_sigma * ion["sigma_minor"],
             height=2 * n_sigma * ion["sigma_major"],
             angle=ion["theta_deg"],
-            edgecolor="red", facecolor="none", linewidth=0.4, alpha=0.8,
+            edgecolor=ec, facecolor="none", linewidth=lw, alpha=0.88,
         )
         ax.add_patch(ell)
     if boundary is not None:
@@ -120,15 +168,36 @@ def visualize(image, ions, n_sigma=2.0, title="", output_path=None,
             linewidth=1.2, linestyle="--", alpha=0.9,
         )
         ax.add_patch(bnd_ell)
+    title_extra = ""
+    if near_flags is not None:
+        n_near = int(near_flags.sum())
+        title_extra = (
+            f"; {n_near} within |y−cy|≤{float(near_major_axis_tol):g} px"
+        )
     ax.set_title(
-        f"{title}   [{len(ions)} ions, ellipse = {n_sigma} sigma]",
+        f"{title}   [{len(ions)} ions{title_extra}, ellipse = {n_sigma} sigma]",
         fontsize=13,
     )
+    if near_flags is not None:
+        leg = [
+            Line2D([0], [0], color="red", lw=2.5, label="other ions"),
+            Line2D(
+                [0], [0], color="lime", lw=2.5,
+                label=f"near axis (|y-cy|<={float(near_major_axis_tol):g} px)",
+            ),
+            Line2D([0], [0], color="gold", lw=2, ls="--", label="major axis y=cy"),
+        ]
+        ax.legend(handles=leg, loc="upper right", fontsize=9, framealpha=0.92)
     ax.set_xlabel("x (pixel)")
     ax.set_ylabel("y (pixel)")
 
     if show_fit_quality and r2_row is not None:
-        _plot_weighted_r2_panel(axes[r2_row], image, ions, boundary, n_sigma)
+        r2_near = near_flags if near_flags is not None else None
+        _plot_weighted_r2_panel(
+            axes[r2_row], image, ions, boundary, n_sigma,
+            near_flags=r2_near,
+            show_major_axis_hline=near_flags is not None,
+        )
 
     fig.tight_layout()
     if output_path:
