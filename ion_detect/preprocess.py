@@ -5,7 +5,7 @@ from scipy.ndimage import maximum_filter
 from .boundary import apply_boundary_filter
 
 
-def build_matched_kernel(sigma_x=1.2, sigma_y=1.8, half_size=3):
+def build_matched_kernel(sigma_x=1, sigma_y=2.3, half_size=3):
     """构造与离子 PSF 匹配的高斯核，用于增强信噪比。"""
     ky, kx = np.mgrid[-half_size:half_size + 1, -half_size:half_size + 1]
     kernel = np.exp(-0.5 * (kx**2 / sigma_x**2 + ky**2 / sigma_y**2))

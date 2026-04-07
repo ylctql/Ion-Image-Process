@@ -18,7 +18,7 @@ class BlobPreprocessResult:
     signal: np.ndarray
     """已减背景时同 ``detect_ions`` 首轮 ``signal``；未减背景时为 ``image`` 的浮点副本。"""
     denoised_map: np.ndarray
-    """用于 ``binarize_on='denoised_map'`` 的浮点图：开启匹配滤波时为滤波结果，否则与 ``signal`` 相同。"""
+    """二值化所用的浮点图：开启匹配滤波时为滤波结果，否则与 ``signal`` 相同。"""
     boundary: tuple[float, float, float, float] | None
     """``(cx, cy, a, b)`` 椭圆；估计失败时为 ``None``。"""
 

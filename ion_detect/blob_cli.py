@@ -22,8 +22,8 @@ from ion_detect.cli_helpers import resolve_indices
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="run_blob_workflow：默认仅减背景（可加 --matched-filter）→ boundary → 二值化 → 连通域 → 轴对齐矩形；"
-        "输出上下两幅子图 PNG（上：灰度+矩形；下：二值+矩形）",
+        description="run_blob_workflow：可选减背景（默认开）与可选匹配滤波 → 在该浮点图上二值化 → boundary → 连通域 → 轴对齐矩形；"
+        "输出上下两幅子图 PNG（上：二值化前浮点图+色标与预处理说明；下：二值+矩形）",
     )
     parser.add_argument("indices", nargs="*", default=["0"], help="帧索引（与 ion_detect 相同切片语法）")
     parser.add_argument(
@@ -37,31 +37,24 @@ def main() -> None:
         type=float,
         required=True,
         metavar="T",
-        help="二值化阈值（作用在 --binarize-on 所选图上）",
-    )
-    parser.add_argument(
-        "--binarize-on",
-        choices=("denoised_map", "signal"),
-        default="denoised_map",
-        help="denoised_map=在 denoised_map 上阈值（默认无匹配滤波时等同 bgsub）；signal=始终在 signal 上阈值",
+        help="二值化阈值（作用在：可选 bgsub 后的 signal，再可选匹配滤波后的浮点图上）",
     )
     parser.add_argument(
         "--no-bgsub",
         action="store_true",
-        help="不做高斯减背景：signal=原图浮点，boundary/二值化均基于此（默认做 bgsub）",
+        help="不做高斯减背景：在原始图像浮点上继续做可选匹配滤波并二值化（默认先做 bgsub）",
     )
     parser.add_argument(
         "--matched-filter",
         action="store_true",
-        help="对 signal 做与 detect_ions 相同的匹配滤波；denoised_map 为滤波图，否则 denoised_map=signal",
+        help="对当前 signal 做与 detect_ions 相同的匹配滤波后再二值化",
     )
-    parser.add_argument("--binarize-strict", action="store_true", help="前景为 >T 而非 >=T")
     parser.add_argument(
         "--connectivity",
         type=int,
         choices=(4, 8),
-        default=8,
-        help="连通域邻接：4 或 8",
+        default=4,
+        help="连通域邻接：4 或 8（默认 4）",
     )
     parser.add_argument(
         "--min-area-pixels",
@@ -70,11 +63,10 @@ def main() -> None:
         metavar="N",
         help="忽略像素数 < N 的连通域",
     )
-    parser.add_argument("--show", action="store_true", help="弹窗（仍会保存 PNG）")
     parser.add_argument(
-        "--no-boundary-ellipse",
+        "--show",
         action="store_true",
-        help="左图不绘制 crystal boundary 椭圆",
+        help="弹窗：除双栏结果外，另开空域 brightness 分布图（RdBu_r/色标与 ion_detect 附录 bgsub 图一致），再显示双栏 PNG 内容",
     )
     args = parser.parse_args()
 
@@ -104,8 +96,6 @@ def main() -> None:
             args.threshold,
             use_bgsub=not args.no_bgsub,
             use_matched_filter=args.matched_filter,
-            binarize_on=args.binarize_on,
-            ge=not args.binarize_strict,
             connectivity=conn,
             min_area_pixels=int(args.min_area_pixels),
         )
@@ -120,14 +110,16 @@ def main() -> None:
         thr_s = f"{args.threshold:g}".replace(".", "p").replace("-", "m")
         png = out_dir / f"blob_workflow_{idx:04d}_{safe}_thr{thr_s}.png"
         visualize_blob_workflow(
-            image,
+            res.preprocess.denoised_map,
             res.binary,
             boundary=res.preprocess.boundary,
             rects=res.rects,
-            title=f"[{idx:04d}] {target.name} thr={args.threshold:g} src={args.binarize_on}",
+            title=f"[{idx:04d}] {target.name}",
+            threshold=float(args.threshold),
+            use_bgsub=not args.no_bgsub,
+            use_matched_filter=args.matched_filter,
             output_path=png,
             show=args.show,
-            draw_boundary=not args.no_boundary_ellipse,
         )
 
 
