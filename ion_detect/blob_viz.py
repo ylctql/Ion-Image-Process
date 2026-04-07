@@ -6,10 +6,12 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
 from matplotlib.patches import Ellipse
 from matplotlib.patches import Polygon
 
 from .blob_components import MinAreaRect
+from .blob_ion_positions import ion_equilibrium_positions_xy
 
 # 与 viz.visualize_* 一致：像素为正方形
 _VIS_ASPECT = "equal"
@@ -37,20 +39,76 @@ def _add_rect_patches(
     rects: list[MinAreaRect],
     *,
     edgecolor: str = "lime",
+    edgecolor_merged: str | None = "darkorange",
     linewidth: float = 1.2,
     zorder: float = 6,
 ) -> None:
+    """绘制轴对齐矩形；``from_edge_merge`` 为 True 时使用 ``edgecolor_merged``（不为 None 时）。"""
     for r in rects:
+        ec = (
+            edgecolor_merged
+            if (edgecolor_merged is not None and getattr(r, "from_edge_merge", False))
+            else edgecolor
+        )
         ax.add_patch(
             Polygon(
                 r.corners_xy,
                 closed=True,
                 fill=False,
-                edgecolor=edgecolor,
+                edgecolor=ec,
                 linewidth=linewidth,
                 zorder=zorder,
             ),
         )
+
+
+def _add_ion_equilibrium_markers(
+    ax,
+    positions: list[tuple[float, float]],
+    *,
+    color: str = "magenta",
+    marker: str = "+",
+    markersize: float = 10.0,
+    markeredgewidth: float = 1.5,
+    zorder: float = 8,
+) -> None:
+    """离子平衡坐标（矩形中心或 y 向条带内前景质心）。"""
+    if not positions:
+        return
+    xs = [p[0] for p in positions]
+    ys = [p[1] for p in positions]
+    ax.plot(
+        xs,
+        ys,
+        linestyle="none",
+        marker=marker,
+        color=color,
+        markersize=markersize,
+        markeredgewidth=markeredgewidth,
+        markeredgecolor=color,
+        zorder=zorder,
+    )
+
+
+def _maybe_add_rect_merge_legend(
+    ax,
+    rects: list[MinAreaRect],
+    *,
+    edgecolor: str,
+    edgecolor_merged: str,
+) -> None:
+    if not any(getattr(r, "from_edge_merge", False) for r in rects):
+        return
+    ax.legend(
+        handles=[
+            Line2D([0], [0], color=edgecolor, lw=2, label="Not merged"),
+            Line2D([0], [0], color=edgecolor_merged, lw=2, label="Edge-band merged"),
+        ],
+        loc="lower left",
+        bbox_to_anchor=(0.02, 0.02),
+        fontsize=9,
+        framealpha=0.9,
+    )
 
 
 def _make_blob_brightness_distribution_figure(
@@ -58,13 +116,19 @@ def _make_blob_brightness_distribution_figure(
     *,
     boundary: tuple[float, float, float, float] | None,
     rects: list[MinAreaRect],
+    binary: np.ndarray,
     title: str = "",
     threshold: float | None = None,
     use_bgsub: bool = True,
     use_matched_filter: bool = False,
     draw_boundary: bool = True,
     rect_edgecolor: str = "lime",
+    rect_edgecolor_merged: str = "darkorange",
     rect_linewidth: float = 1.2,
+    n_edge_sliver_merges: int = 0,
+    rect_y_split: bool = False,
+    max_ysize: float = 9.0,
+    ion_xy: list[tuple[float, float]] | None = None,
 ) -> Figure:
     """
     二值化所用浮点图的空域 brightness 分布（与 ``viz.visualize_bgsub_binarized`` 的 bgsub 面板一致：
@@ -113,7 +177,30 @@ def _make_blob_brightness_distribution_figure(
                 zorder=5,
             ),
         )
-    _add_rect_patches(ax, rects, edgecolor=rect_edgecolor, linewidth=rect_linewidth)
+    _add_rect_patches(
+        ax,
+        rects,
+        edgecolor=rect_edgecolor,
+        edgecolor_merged=rect_edgecolor_merged,
+        linewidth=rect_linewidth,
+    )
+    eq_xy = (
+        ion_xy
+        if ion_xy is not None
+        else ion_equilibrium_positions_xy(
+            rects,
+            binary,
+            split=rect_y_split,
+            max_ysize=float(max_ysize),
+        )
+    )
+    _add_ion_equilibrium_markers(ax, eq_xy)
+    _maybe_add_rect_merge_legend(
+        ax,
+        rects,
+        edgecolor=rect_edgecolor,
+        edgecolor_merged=rect_edgecolor_merged,
+    )
 
     prep_parts: list[str] = []
     if use_bgsub:
@@ -122,8 +209,19 @@ def _make_blob_brightness_distribution_figure(
         prep_parts.append("matched filter")
     prep_s = "; ".join(prep_parts) if prep_parts else "raw"
     thr_s = f"{threshold:g}" if threshold is not None else "?"
+    n_ion = len(rects)
+    ion_s = f"ions (after merge)={n_ion}"
+    if n_edge_sliver_merges > 0:
+        ion_s += (
+            f"  |  edge merges={n_edge_sliver_merges}  "
+            f"rects before merge={n_ion + n_edge_sliver_merges}"
+        )
+    n_eq = len(eq_xy)
+    eq_s = f"  |  eq. positions (+)={n_eq}"
+    if rect_y_split:
+        eq_s += f"  |  y-split max_ysize={max_ysize:g}"
     ax.set_title(
-        f"{title.strip()}   [{prep_s}; binarize ≥ {thr_s}]",
+        f"{title.strip()}   [{prep_s}; binarize ≥ {thr_s}]  |  {ion_s}{eq_s}",
         fontsize=12,
     )
     ax.set_xlabel("x (pixel)")
@@ -143,6 +241,7 @@ def visualize_blob_rects(
     show: bool = False,
     draw_boundary: bool = True,
     rect_edgecolor: str = "lime",
+    rect_edgecolor_merged: str = "darkorange",
     rect_linewidth: float = 1.2,
     rect_facecolor: str = "none",
 ) -> None:
@@ -176,13 +275,27 @@ def visualize_blob_rects(
         )
         ax.add_patch(ell)
 
-    _add_rect_patches(ax, rects, edgecolor=rect_edgecolor, linewidth=rect_linewidth)
+    _add_rect_patches(
+        ax,
+        rects,
+        edgecolor=rect_edgecolor,
+        edgecolor_merged=rect_edgecolor_merged,
+        linewidth=rect_linewidth,
+    )
+    _maybe_add_rect_merge_legend(
+        ax,
+        rects,
+        edgecolor=rect_edgecolor,
+        edgecolor_merged=rect_edgecolor_merged,
+    )
 
     ax.set_xlim(-0.5, w - 0.5)
     ax.set_ylim(h - 0.5, -0.5)
     ax.set_xlabel("x (pixel)")
     ax.set_ylabel("y (pixel)")
-    ax.set_title(f"{title}  |  blobs={len(rects)}".strip())
+    ax.set_title(
+        f"{title}  |  ions={len(rects)}".strip(),
+    )
     if output_path is not None:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -207,7 +320,11 @@ def visualize_blob_workflow(
     show: bool = False,
     draw_boundary: bool = True,
     rect_edgecolor: str = "lime",
+    rect_edgecolor_merged: str = "darkorange",
     rect_linewidth: float = 1.2,
+    n_edge_sliver_merges: int = 0,
+    rect_y_split: bool = False,
+    max_ysize: float = 9.0,
 ) -> None:
     """
     上：二值化前的浮点图（与 ``run_blob_workflow`` 阈值所用阵列一致）+ 可选 boundary + 矩形；
@@ -216,6 +333,11 @@ def visualize_blob_workflow(
 
     ``show=True`` 时额外建 **空域 brightness 分布图**（``RdBu_r`` / 横向 colorbar，与 ``ion_detect.viz``
     中 bgsub 二值化附录图一致），随后与该双栏图一并 ``plt.show()``。
+
+    ``rect_y_split=True`` 时，对 y 向跨度大于 ``max_ysize`` 的合并后矩形在 y 方向等分为
+    ``ceil(height / max_ysize)`` 条，条带内对二值前景求质心；若条带与**不需 split** 的其它矩形
+    AABB 相交，则先去掉落在这些盒子内的像素再求质心。短矩形仍用其几何中心。
+    洋红 ``+`` 标出所有平衡位置（上下栏、brightness 图一致）。
     """
     im = np.asarray(float_map_pre_binarize, dtype=np.float64)
     bin_im = np.asarray(binary, dtype=bool)
@@ -225,18 +347,31 @@ def visualize_blob_workflow(
         )
     h, w = im.shape
     fig_brightness: Figure | None = None
+    ion_xy: list[tuple[float, float]] = ion_equilibrium_positions_xy(
+        rects,
+        bin_im,
+        split=rect_y_split,
+        max_ysize=float(max_ysize),
+    )
+
     if show:
         fig_brightness = _make_blob_brightness_distribution_figure(
             im,
             boundary=boundary,
             rects=rects,
+            binary=bin_im,
             title=title,
             threshold=threshold,
             use_bgsub=use_bgsub,
             use_matched_filter=use_matched_filter,
             draw_boundary=draw_boundary,
             rect_edgecolor=rect_edgecolor,
+            rect_edgecolor_merged=rect_edgecolor_merged,
             rect_linewidth=rect_linewidth,
+            n_edge_sliver_merges=n_edge_sliver_merges,
+            rect_y_split=rect_y_split,
+            max_ysize=max_ysize,
+            ion_xy=ion_xy,
         )
 
     lo = float(np.percentile(im, 1))
@@ -259,6 +394,22 @@ def visualize_blob_workflow(
     ]
     if threshold is not None:
         prep_lines.append(f"threshold T: {threshold:g}")
+    n_ion = len(rects)
+    n_merged_boxes = sum(1 for r in rects if getattr(r, "from_edge_merge", False))
+    prep_lines.append(f"Ion count (after merge): {n_ion}")
+    if n_edge_sliver_merges > 0:
+        prep_lines.append(f"Edge-band merge operations: {n_edge_sliver_merges}")
+        prep_lines.append(f"Bounding boxes before merge: {n_ion + n_edge_sliver_merges}")
+    if n_merged_boxes > 0:
+        prep_lines.append(f"Edge-merged boxes (orange): {n_merged_boxes}")
+    prep_lines.append(f"Ion equilibrium: magenta +  (n={len(ion_xy)})")
+    if rect_y_split:
+        prep_lines.append(
+            f"y-split tall rects: on  (max_ysize={max_ysize:g})",
+        )
+    else:
+        prep_lines.append("y-split tall rects: off  (use rect centers)")
+
     ax0.text(
         0.02,
         0.98,
@@ -286,13 +437,26 @@ def visualize_blob_workflow(
                 zorder=5,
             ),
         )
-    _add_rect_patches(ax0, rects, edgecolor=rect_edgecolor, linewidth=rect_linewidth)
+    _add_rect_patches(
+        ax0,
+        rects,
+        edgecolor=rect_edgecolor,
+        edgecolor_merged=rect_edgecolor_merged,
+        linewidth=rect_linewidth,
+    )
+    _add_ion_equilibrium_markers(ax0, ion_xy)
+    _maybe_add_rect_merge_legend(
+        ax0,
+        rects,
+        edgecolor=rect_edgecolor,
+        edgecolor_merged=rect_edgecolor_merged,
+    )
     ax0.set_xlim(-0.5, w - 0.5)
     ax0.set_ylim(h - 0.5, -0.5)
     ax0.set_xlabel("x (pixel)")
     ax0.set_ylabel("y (pixel)")
     ax0.set_title(
-        f"float map before binarize + boundary + rects  |  blobs={len(rects)}",
+        f"float map (intensity) + boundary + rects  |  ions={n_ion}  |  eq. (+)={len(ion_xy)}",
     )
 
     ax1.imshow(bin_im.astype(np.float64), cmap="gray", aspect="equal", vmin=0.0, vmax=1.0)
@@ -312,13 +476,28 @@ def visualize_blob_workflow(
                 zorder=5,
             ),
         )
-    _add_rect_patches(ax1, rects, edgecolor=rect_edgecolor, linewidth=rect_linewidth)
+    _add_rect_patches(
+        ax1,
+        rects,
+        edgecolor=rect_edgecolor,
+        edgecolor_merged=rect_edgecolor_merged,
+        linewidth=rect_linewidth,
+    )
+    _add_ion_equilibrium_markers(ax1, ion_xy)
+    _maybe_add_rect_merge_legend(
+        ax1,
+        rects,
+        edgecolor=rect_edgecolor,
+        edgecolor_merged=rect_edgecolor_merged,
+    )
     ax1.set_xlim(-0.5, w - 0.5)
     ax1.set_ylim(h - 0.5, -0.5)
     ax1.set_xlabel("x (pixel)")
     ax1.set_ylabel("y (pixel)")
     thr_s = f"{threshold:g}" if threshold is not None else "?"
-    ax1.set_title(f"binary (T={thr_s}) + boundary + rects")
+    ax1.set_title(
+        f"binary (T={thr_s}) + boundary + rects  |  ions={n_ion}  |  eq. (+)={len(ion_xy)}",
+    )
 
     fig.suptitle(title.strip(), fontsize=12)
     if output_path is not None:

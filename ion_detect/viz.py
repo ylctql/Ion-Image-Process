@@ -172,7 +172,7 @@ def visualize(image, ions, n_sigma=2.0, title="", output_path=None,
     if near_flags is not None:
         n_near = int(near_flags.sum())
         title_extra = (
-            f"; {n_near} within |y−cy|≤{float(near_major_axis_tol):g} px"
+            f"; {n_near} within |y-cy|<={float(near_major_axis_tol):g} px"
         )
     ax.set_title(
         f"{title}   [{len(ions)} ions{title_extra}, ellipse = {n_sigma} sigma]",

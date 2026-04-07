@@ -172,7 +172,7 @@ def main() -> None:
 
     fig, axes = plt.subplots(1, 2, figsize=(10, 4.2))
     suptitle = (
-        f"σx / σy (|y0-cy|≤{tol:g} px, major axis along x; "
+        f"sigma_x / sigma_y (|y0-cy|<={tol:g} px, major axis along x; "
         f"detect_ions) — N={sx.size} from {n_frames_ok} frames"
     )
     if n_frames_no_boundary:
@@ -190,13 +190,16 @@ def main() -> None:
             sd_txt = f"{float(np.std(arr, ddof=1)):.4f}"
         else:
             sd_txt = "—"
-        return f"均值 μ = {mu:.4f}\n标准差 s = {sd_txt}\n中位数 = {med:.4f}\nN = {arr.size}"
+        return f"mean μ = {mu:.4f}\nstd s = {sd_txt}\nmedian = {med:.4f}\nN = {arr.size}"
 
     if sx.size > 0:
         axes[0].hist(sx, bins=bins, color="steelblue", edgecolor="black", linewidth=0.35, alpha=0.85)
         mu_x = float(np.mean(sx))
-        axes[0].axvline(mu_x, color="darkviolet", ls="-", lw=1.5, label=f"均值 μ={mu_x:.4f}")
-        axes[0].axvline(float(np.median(sx)), color="crimson", ls="--", lw=1.2, label=f"中位数={np.median(sx):.4f}")
+        axes[0].axvline(mu_x, color="darkviolet", ls="-", lw=1.5, label=f"mean μ={mu_x:.4f}")
+        axes[0].axvline(
+            float(np.median(sx)), color="crimson", ls="--", lw=1.2,
+            label=f"median={np.median(sx):.4f}",
+        )
         stx = _hist_stats_box_text(sx)
         axes[0].text(
             0.98, 0.97, stx, transform=axes[0].transAxes, va="top", ha="right",
@@ -204,15 +207,18 @@ def main() -> None:
             bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.62),
         )
         axes[0].legend(loc="upper left", fontsize=8)
-    axes[0].set_xlabel("σx (pixel)")
+    axes[0].set_xlabel("sigma_x (pixel)")
     axes[0].set_ylabel("Count")
-    axes[0].set_title("σx")
+    axes[0].set_title("sigma_x")
 
     if sy.size > 0:
         axes[1].hist(sy, bins=bins, color="darkseagreen", edgecolor="black", linewidth=0.35, alpha=0.85)
         mu_y = float(np.mean(sy))
-        axes[1].axvline(mu_y, color="darkviolet", ls="-", lw=1.5, label=f"均值 μ={mu_y:.4f}")
-        axes[1].axvline(float(np.median(sy)), color="crimson", ls="--", lw=1.2, label=f"中位数={np.median(sy):.4f}")
+        axes[1].axvline(mu_y, color="darkviolet", ls="-", lw=1.5, label=f"mean μ={mu_y:.4f}")
+        axes[1].axvline(
+            float(np.median(sy)), color="crimson", ls="--", lw=1.2,
+            label=f"median={np.median(sy):.4f}",
+        )
         sty = _hist_stats_box_text(sy)
         axes[1].text(
             0.98, 0.97, sty, transform=axes[1].transAxes, va="top", ha="right",
@@ -220,9 +226,9 @@ def main() -> None:
             bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.62),
         )
         axes[1].legend(loc="upper left", fontsize=8)
-    axes[1].set_xlabel("σy (pixel)")
+    axes[1].set_xlabel("sigma_y (pixel)")
     axes[1].set_ylabel("Count")
-    axes[1].set_title("σy")
+    axes[1].set_title("sigma_y")
 
     plt.tight_layout()
     fig.savefig(out_png, dpi=160, bbox_inches="tight")

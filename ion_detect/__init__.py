@@ -17,9 +17,12 @@ from .blob_components import (
     MinAreaRect,
     axis_aligned_bounding_rect_xy,
     binarize_foreground,
+    drop_rects_both_axis_spans_at_most,
     label_connected_components,
     rects_from_labeled,
 )
+from .blob_edge_rect_merge import merge_edge_band_sliver_rects
+from .blob_ion_positions import ion_equilibrium_positions_xy
 from .blob_preprocess import BlobPreprocessResult, map_for_binarize, preprocess_for_blob_analysis
 from .blob_workflow import BlobWorkflowResult, run_blob_workflow
 from .edge_strip import outer_y_edge_column_profiles, outer_y_edge_strip_masks
@@ -36,7 +39,10 @@ __all__ = [
     "bgsub_binarize_u8",
     "binarize_foreground",
     "detect_ions",
+    "drop_rects_both_axis_spans_at_most",
     "label_connected_components",
+    "merge_edge_band_sliver_rects",
+    "ion_equilibrium_positions_xy",
     "map_for_binarize",
     "preprocess_for_blob_analysis",
     "rects_from_labeled",

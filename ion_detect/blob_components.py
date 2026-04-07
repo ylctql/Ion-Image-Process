@@ -57,6 +57,8 @@ class MinAreaRect:
     corners_xy: np.ndarray
     """形状 (4, 2)，列为 ``(x, y)``，逆时针或顺时针闭合。"""
     area_pixels: int
+    from_edge_merge: bool = False
+    """True 表示该框由椭圆 y 外缘带薄 blob 与最近邻合并得到。"""
 
 
 def _axis_aligned_rect_xy(xy: np.ndarray) -> dict[str, Any]:
@@ -125,3 +127,24 @@ def rects_from_labeled(
             ),
         )
     return out
+
+
+def drop_rects_both_axis_spans_at_most(
+    rects: list[MinAreaRect],
+    max_span: float = 1.0,
+    *,
+    eps: float = 1e-9,
+) -> tuple[list[MinAreaRect], int]:
+    """
+    剔除轴对齐外接矩形在 x、y 两向跨度均不超过 ``max_span`` 的项（默认 ``max_span=1``）。
+
+    此处 ``width`` / ``height`` 为 ``xmax - xmin``、``ymax - ymin``，故含单点连通域
+    ``(0, 0)``、以及完全落在 2×2 像素格内的斑块等；对剩余结果再作 merge / split。
+
+    Returns
+    -------
+    kept, n_dropped
+    """
+    thr = float(max_span) + float(eps)
+    kept = [r for r in rects if not (r.width <= thr and r.height <= thr)]
+    return kept, len(rects) - len(kept)

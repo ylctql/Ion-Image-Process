@@ -15,6 +15,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from output_paths import DEFAULT_DATA_DIR, OUT_BLOB_CONNECTED
 
+from ion_detect.blob_ion_positions import ion_equilibrium_positions_xy
 from ion_detect.blob_viz import visualize_blob_workflow
 from ion_detect.blob_workflow import run_blob_workflow
 from ion_detect.cli_helpers import resolve_indices
@@ -64,6 +65,46 @@ def main() -> None:
         help="忽略像素数 < N 的连通域",
     )
     parser.add_argument(
+        "--no-merge-small-rects",
+        action="store_true",
+        help="关闭椭圆 y 外缘带内过薄小矩形与最近邻 AABB 合并（默认会进行合并）",
+    )
+    parser.add_argument(
+        "--y-edge-frac",
+        type=float,
+        default=0.3,
+        help="外缘带参数 F（默认 0.3），与 outer_y_edge_strip_masks 一致",
+    )
+    parser.add_argument(
+        "--min-edge-ysize",
+        type=float,
+        default=5.0,
+        help="y 向边长小于该值的条带内矩形才参与合并（默认 5）",
+    )
+    parser.add_argument(
+        "--no-merge-band-clip-ellipse",
+        action="store_true",
+        help="条带掩膜不按椭圆裁剪（与 --no-clip-ellipse 类脚本对应）",
+    )
+    parser.add_argument(
+        "--no-pre-merge-drop",
+        action="store_true",
+        help="不在 merge 前剔除两轴跨度均 ≤1 的矩形（默认会先剔除再 merge / 可视化 split）",
+    )
+    parser.add_argument(
+        "--split",
+        action="store_true",
+        help="合并后若矩形 y 向跨度 > max_ysize，则按 ceil(height/max_ysize) 等分 y 条带，"
+        "条带内对二值前景求质心作为离子平衡位置；否则仍为矩形中心（洋红 + 标在各图上）",
+    )
+    parser.add_argument(
+        "--max-ysize",
+        type=float,
+        default=9.0,
+        metavar="Y",
+        help="与 --split 配合：y 向边长阈值（默认 9）；仅当跨度更大时才分割",
+    )
+    parser.add_argument(
         "--show",
         action="store_true",
         help="弹窗：除双栏结果外，另开空域 brightness 分布图（RdBu_r/色标与 ion_detect 附录 bgsub 图一致），再显示双栏 PNG 内容",
@@ -98,10 +139,26 @@ def main() -> None:
             use_matched_filter=args.matched_filter,
             connectivity=conn,
             min_area_pixels=int(args.min_area_pixels),
+            merge_small_rects=not args.no_merge_small_rects,
+            y_edge_frac=float(args.y_edge_frac),
+            min_edge_ysize=float(args.min_edge_ysize),
+            merge_band_clip_ellipse=not args.no_merge_band_clip_ellipse,
+            pre_merge_drop_max_span=None if args.no_pre_merge_drop else 1.0,
         )
         elapsed = time.perf_counter() - t0
+        n_final_ions = len(
+            ion_equilibrium_positions_xy(
+                res.rects,
+                res.binary,
+                split=args.split,
+                max_ysize=float(args.max_ysize),
+            ),
+        )
         print(
             f"  labels={res.n_components}, kept_rects={len(res.rects)}, "
+            f"final_ions={n_final_ions}, "
+            f"pre_merge_dropped={res.n_rects_dropped_pre_merge}, "
+            f"edge_sliver_merges={res.n_edge_sliver_merges}, "
             f"boundary={'OK' if res.preprocess.boundary else 'None'}, {elapsed:.2f}s",
         )
 
@@ -120,6 +177,9 @@ def main() -> None:
             use_matched_filter=args.matched_filter,
             output_path=png,
             show=args.show,
+            n_edge_sliver_merges=res.n_edge_sliver_merges,
+            rect_y_split=args.split,
+            max_ysize=float(args.max_ysize),
         )
 
 

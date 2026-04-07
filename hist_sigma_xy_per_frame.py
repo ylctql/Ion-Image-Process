@@ -47,13 +47,21 @@ def _hist_one(
     if arr.size > 0:
         ax.hist(arr, bins=b, color="steelblue", edgecolor="black", linewidth=0.35, alpha=0.85)
         mu = float(np.mean(arr))
-        ax.axvline(mu, color="darkviolet", ls="-", lw=1.5, label=f"均值 μ={mu:.4f}")
-        ax.axvline(float(np.median(arr)), color="crimson", ls="--", lw=1.2, label=f"中位数={np.median(arr):.4f}")
+        ax.axvline(mu, color="darkviolet", ls="-", lw=1.5, label=f"mean μ={mu:.4f}")
+        ax.axvline(
+            float(np.median(arr)), color="crimson", ls="--", lw=1.2,
+            label=f"median={np.median(arr):.4f}",
+        )
         if arr.size > 1:
             sd_txt = f"{float(np.std(arr, ddof=1)):.4f}"
         else:
             sd_txt = "—"
-        st = f"均值 μ = {mu:.4f}\n标准差 s = {sd_txt}\n中位数 = {float(np.median(arr)):.4f}\nN = {arr.size}"
+        st = (
+            f"mean μ = {mu:.4f}\n"
+            f"std s = {sd_txt}\n"
+            f"median = {float(np.median(arr)):.4f}\n"
+            f"N = {arr.size}"
+        )
         ax.text(
             0.98, 0.97, st, transform=ax.transAxes, va="top", ha="right",
             fontsize=8,
@@ -61,7 +69,10 @@ def _hist_one(
         )
         ax.legend(loc="upper left", fontsize=8)
     else:
-        ax.text(0.5, 0.5, "N = 0（无有效 σ）", transform=ax.transAxes, ha="center", va="center", fontsize=11)
+        ax.text(
+            0.5, 0.5, "N = 0 (no valid σ)", transform=ax.transAxes,
+            ha="center", va="center", fontsize=11,
+        )
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel("Count")
@@ -130,12 +141,12 @@ def main() -> None:
 
         stem = f"{idx:04d}"
         name = target.name
-        title_x = f"[{stem}] {name}  —  σx (detect_ions), N={sx.size}"
-        title_y = f"[{stem}] {name}  —  σy (detect_ions), N={sy.size}"
+        title_x = f"[{stem}] {name}  —  sigma_x (detect_ions), N={sx.size}"
+        title_y = f"[{stem}] {name}  —  sigma_y (detect_ions), N={sy.size}"
         path_x = dir_sx / f"{stem}.png"
         path_y = dir_sy / f"{stem}.png"
-        _hist_one(sx, title_x, "σx (pixel)", path_x, args.bins)
-        _hist_one(sy, title_y, "σy (pixel)", path_y, args.bins)
+        _hist_one(sx, title_x, "sigma_x (pixel)", path_x, args.bins)
+        _hist_one(sy, title_y, "sigma_y (pixel)", path_y, args.bins)
         print(f"[{stem}] ions={len(ions)}, with σx/σy={sx.size} -> {path_x} , {path_y}")
 
 

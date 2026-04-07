@@ -392,7 +392,7 @@ def main() -> None:
 
     fig, ax = plt.subplots(figsize=(6.8, 5.2))
     suptitle = (
-        f"y0 vs A (|y0−cy|≤{tol:g} px; deconv kernel exp(−(x²+y²)/2); "
+        f"y0 vs A (|y0-cy|<={tol:g} px; deconv kernel exp(-(x^2+y^2)/2); "
         f"N={y0_arr.size} from {n_frames_ok} frames"
     )
     if n_frames_no_boundary:
@@ -406,11 +406,14 @@ def main() -> None:
         ax.plot(xs, slope * xs + intercept, "r-", lw=1.6, label=f"Linear fit: A = {slope:.4g}·y0 + {intercept:.4g}")
         ax.legend(loc="best", fontsize=9)
     else:
-        ax.text(0.5, 0.5, "无有效拟合点", ha="center", va="center", transform=ax.transAxes)
+        ax.text(
+            0.5, 0.5, "No valid fit points", ha="center", va="center",
+            transform=ax.transAxes,
+        )
 
-    ax.set_xlabel("识别中心 y0 (pixel)")
-    ax.set_ylabel("拟合参数 A (pixel)")
-    ax.set_title("A 来自 f(y)=c0/√(A²−y²) 对反卷积 ROI 的拟合")
+    ax.set_xlabel("Detected center y0 (pixel)")
+    ax.set_ylabel("Fit parameter A (pixel)")
+    ax.set_title(r"$A$ from $f(y)=c_0/\sqrt{A^2-y^2}$ fit on deconvolution ROI")
     fig.tight_layout()
     fig.savefig(out_png, dpi=160, bbox_inches="tight")
     plt.close(fig)
