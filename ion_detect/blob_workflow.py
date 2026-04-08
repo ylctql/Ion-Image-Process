@@ -27,6 +27,8 @@ class BlobWorkflowResult:
     rects: list[MinAreaRect]
     n_edge_sliver_merges: int = 0
     n_rects_dropped_pre_merge: int = 0
+    # 连通域 → rects_from_labeled 之后、pre-merge drop / edge merge 之前
+    n_rects_after_labeling: int = 0
 
 
 def run_blob_workflow(
@@ -66,6 +68,7 @@ def run_blob_workflow(
     binary = binarize_foreground(src, threshold, ge=ge)
     labeled, n = label_connected_components(binary, connectivity=connectivity)
     rects = rects_from_labeled(labeled, min_area_pixels=min_area_pixels)
+    n_rects_after_labeling = len(rects)
     n_drop_pre = 0
     if pre_merge_drop_max_span is not None:
         rects, n_drop_pre = drop_rects_both_axis_spans_at_most(
@@ -95,4 +98,5 @@ def run_blob_workflow(
         rects=rects,
         n_edge_sliver_merges=n_edge,
         n_rects_dropped_pre_merge=n_drop_pre,
+        n_rects_after_labeling=n_rects_after_labeling,
     )

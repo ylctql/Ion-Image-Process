@@ -24,6 +24,11 @@ OUT_Y_LAYER_PROFILE = OUTPUTS_ROOT / "y_layer_profiles"
 OUT_ION_CENTERS_MERGED = OUTPUTS_ROOT / "ion_centers_merged"
 OUT_SECOND_LAYER_PEAKS = OUTPUTS_ROOT / "second_layer_peaks"
 OUT_BLOB_CONNECTED = OUTPUTS_ROOT / "blob_connected"
+# blob_cli：merge / pre-merge-drop / y-split 日志与直方图
+OUT_BLOB_PIPELINE = OUTPUTS_ROOT / "blob"
+OUT_BLOB_MERGE_SPLIT_LOG = OUT_BLOB_PIPELINE / "merge_split.log"
+OUT_BLOB_MERGE_SPLIT_HIST_PNG = OUT_BLOB_PIPELINE / "hist_merge_split.png"
+OUT_PIXEL_HIST = OUTPUTS_ROOT / "pixel_hist"
 
 
 def new_batch_merge_slab_run_dir() -> Path:
