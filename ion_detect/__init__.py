@@ -19,10 +19,11 @@ from .blob_components import (
     binarize_foreground,
     drop_rects_both_axis_spans_at_most,
     label_connected_components,
+    rect_component_labels,
     rects_from_labeled,
 )
 from .blob_edge_rect_merge import merge_edge_band_sliver_rects
-from .blob_ion_positions import ion_equilibrium_positions_xy
+from .blob_ion_positions import ion_equilibrium_positions_xy, merge_close_ion_positions_xy
 from .blob_preprocess import BlobPreprocessResult, map_for_binarize, preprocess_for_blob_analysis
 from .blob_workflow import BlobWorkflowResult, run_blob_workflow
 from .edge_strip import outer_y_edge_column_profiles, outer_y_edge_strip_masks
@@ -43,8 +44,10 @@ __all__ = [
     "label_connected_components",
     "merge_edge_band_sliver_rects",
     "ion_equilibrium_positions_xy",
+    "merge_close_ion_positions_xy",
     "map_for_binarize",
     "preprocess_for_blob_analysis",
+    "rect_component_labels",
     "rects_from_labeled",
     "run_blob_workflow",
     "visualize_blob_rects",

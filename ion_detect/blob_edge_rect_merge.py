@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .blob_components import MinAreaRect, axis_aligned_bounding_rect_xy
+from .blob_components import MinAreaRect, axis_aligned_bounding_rect_xy, rect_component_labels
 from .edge_strip import outer_y_edge_strip_masks
 
 
@@ -29,6 +29,7 @@ def _merge_two_min_area_rects(a: MinAreaRect, b: MinAreaRect) -> MinAreaRect:
     geo = axis_aligned_bounding_rect_xy(corners)
     if geo is None:
         return a
+    labs = tuple(sorted(set(rect_component_labels(a)) | set(rect_component_labels(b))))
     return MinAreaRect(
         label=min(a.label, b.label),
         center_xy=(float(geo["center"][0]), float(geo["center"][1])),
@@ -38,6 +39,7 @@ def _merge_two_min_area_rects(a: MinAreaRect, b: MinAreaRect) -> MinAreaRect:
         corners_xy=np.asarray(geo["corners"], dtype=np.float64),
         area_pixels=int(a.area_pixels + b.area_pixels),
         from_edge_merge=True,
+        component_labels=labs,
     )
 
 

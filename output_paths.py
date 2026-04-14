@@ -8,7 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 OUTPUTS_ROOT = PROJECT_ROOT / "outputs"
 
 # 多数脚本默认的 .npy 数据目录（输入）
-DEFAULT_DATA_DIR = PROJECT_ROOT / "20260305_1727"
+DEFAULT_DATA_DIR = PROJECT_ROOT / "../20260305_1727"
 
 OUT_ION_DETECT_IMGS = OUTPUTS_ROOT / "ion_detect_imgs"
 OUT_ION_POS = OUTPUTS_ROOT / "IonPos"

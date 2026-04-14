@@ -59,6 +59,15 @@ class MinAreaRect:
     area_pixels: int
     from_edge_merge: bool = False
     """True 表示该框由椭圆 y 外缘带薄 blob 与最近邻合并得到。"""
+    component_labels: tuple[int, ...] | None = None
+    """连通域标签并集；``None`` 表示仅 ``label`` 单域。合并矩形为参与合并的各域标签（升序）。"""
+
+
+def rect_component_labels(r: MinAreaRect) -> tuple[int, ...]:
+    """该矩形对应的连通域标签集合（合并框为多标签）。"""
+    if r.component_labels is not None:
+        return r.component_labels
+    return (int(r.label),)
 
 
 def _axis_aligned_rect_xy(xy: np.ndarray) -> dict[str, Any]:
@@ -124,6 +133,7 @@ def rects_from_labeled(
                 angle_deg=float(geo["angle_deg"]),
                 corners_xy=np.asarray(geo["corners"], dtype=np.float64),
                 area_pixels=count,
+                component_labels=(int(k),),
             ),
         )
     return out

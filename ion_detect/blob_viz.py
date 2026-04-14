@@ -12,6 +12,7 @@ from matplotlib.patches import Polygon
 
 from .blob_components import MinAreaRect
 from .blob_ion_positions import ion_equilibrium_positions_xy
+from .edge_strip import outer_y_edge_strip_masks
 
 # 与 viz.visualize_* 一致：像素为正方形
 _VIS_ASPECT = "equal"
@@ -90,6 +91,47 @@ def _add_ion_equilibrium_markers(
     )
 
 
+def _add_y_edge_band_split_lines(
+    ax,
+    boundary: tuple[float, float, float, float],
+    image_shape: tuple[int, int],
+    *,
+    y_edge_frac: float,
+    merge_band_clip_ellipse: bool = True,
+    color: str = "gold",
+    linewidth: float = 1.2,
+    linestyle: str = "--",
+    alpha: float = 0.95,
+    zorder: float = 6.5,
+) -> None:
+    """在 y外缘条带与内部区域交界处画水平虚线（``y_below`` / ``y_above``，弦向 ``|x-cx|<=x_half``）。"""
+    h, w = int(image_shape[0]), int(image_shape[1])
+    _top, _bot, meta = outer_y_edge_strip_masks(
+        boundary,
+        float(y_edge_frac),
+        (h, w),
+        clip_ellipse=merge_band_clip_ellipse,
+    )
+    cx = float(meta["cx"])
+    y_below = float(meta["y_below"])
+    y_above = float(meta["y_above"])
+    x_half = float(meta["x_half"])
+    if x_half <= 1e-9:
+        x_lo, x_hi = 0.0, float(max(0, w - 1))
+    else:
+        x_lo = cx - x_half
+        x_hi = cx + x_half
+    kw = dict(
+        color=color,
+        linewidth=linewidth,
+        linestyle=linestyle,
+        alpha=alpha,
+        zorder=zorder,
+    )
+    ax.plot([x_lo, x_hi], [y_below, y_below], **kw)
+    ax.plot([x_lo, x_hi], [y_above, y_above], **kw)
+
+
 def _maybe_add_rect_merge_legend(
     ax,
     rects: list[MinAreaRect],
@@ -128,12 +170,20 @@ def _make_blob_brightness_distribution_figure(
     n_edge_sliver_merges: int = 0,
     rect_y_split: bool = False,
     max_ysize: float = 9.0,
+    refine_x: bool = False,
+    x_profile_threshold: float = 0.5,
+    x_profile_rel_to_max: bool = False,
     ion_xy: list[tuple[float, float]] | None = None,
+    labeled: np.ndarray | None = None,
+    y_edge_frac: float | None = None,
+    merge_band_clip_ellipse: bool = True,
 ) -> Figure:
     """
     二值化所用浮点图的空域 brightness 分布（与 ``viz.visualize_bgsub_binarized`` 的 bgsub 面板一致：
     bgsub 和/或匹配滤波时用 ``RdBu_r`` + 对称 |z| 分位色标；仅原图时用灰度百分位拉伸）。
     叠加 crystal boundary 与 blob 轴对齐矩形。由调用方 ``plt.show()`` 后关闭。
+
+    ``y_edge_frac`` 非空且 ``boundary`` 非空时，在上图叠加外缘条带分界水平虚线（与 ``outer_y_edge_strip_masks`` 一致）。
     """
     z = np.asarray(float_map_pre_binarize, dtype=np.float64)
     h, w = z.shape
@@ -177,6 +227,14 @@ def _make_blob_brightness_distribution_figure(
                 zorder=5,
             ),
         )
+    if boundary is not None and y_edge_frac is not None:
+        _add_y_edge_band_split_lines(
+            ax,
+            boundary,
+            (h, w),
+            y_edge_frac=float(y_edge_frac),
+            merge_band_clip_ellipse=merge_band_clip_ellipse,
+        )
     _add_rect_patches(
         ax,
         rects,
@@ -190,8 +248,13 @@ def _make_blob_brightness_distribution_figure(
         else ion_equilibrium_positions_xy(
             rects,
             binary,
+            labeled=labeled,
             split=rect_y_split,
             max_ysize=float(max_ysize),
+            refine_x=refine_x,
+            x_profile_threshold=float(x_profile_threshold),
+            x_profile_rel_to_max=x_profile_rel_to_max,
+            intensity=z,
         )
     )
     _add_ion_equilibrium_markers(ax, eq_xy)
@@ -220,6 +283,10 @@ def _make_blob_brightness_distribution_figure(
     eq_s = f"  |  eq. positions (+)={n_eq}"
     if rect_y_split:
         eq_s += f"  |  y-split max_ysize={max_ysize:g}"
+    if refine_x:
+        eq_s += f"  |  x-refine thr={x_profile_threshold:g}"
+        if x_profile_rel_to_max:
+            eq_s += " (rel max)"
     ax.set_title(
         f"{title.strip()}   [{prep_s}; binarize ≥ {thr_s}]  |  {ion_s}{eq_s}",
         fontsize=12,
@@ -325,19 +392,32 @@ def visualize_blob_workflow(
     n_edge_sliver_merges: int = 0,
     rect_y_split: bool = False,
     max_ysize: float = 9.0,
+    refine_x: bool = False,
+    x_profile_threshold: float = 0.5,
+    x_profile_rel_to_max: bool = False,
+    labeled: np.ndarray | None = None,
+    y_edge_frac: float | None = 0.3,
+    merge_band_clip_ellipse: bool = True,
+    ion_xy: list[tuple[float, float]] | None = None,
 ) -> None:
     """
     上：二值化前的浮点图（与 ``run_blob_workflow`` 阈值所用阵列一致）+ 可选 boundary + 矩形；
        带 colorbar（brightness）及 bgsub / matched-filter 是否启用的标注。
+       若 ``boundary`` 与 ``y_edge_frac`` 非空，在上图用金色水平虚线标出外缘条带与内部的 y 分界
+       （与 ``outer_y_edge_strip_masks`` / edge merge 几何一致）。
     下：二值图 + 同组矩形；上下两栏在 ``boundary`` 非空时均绘制晶格椭圆。
 
     ``show=True`` 时额外建 **空域 brightness 分布图**（``RdBu_r`` / 横向 colorbar，与 ``ion_detect.viz``
     中 bgsub 二值化附录图一致），随后与该双栏图一并 ``plt.show()``。
 
-    ``rect_y_split=True`` 时，对 y 向跨度大于 ``max_ysize`` 的合并后矩形在 y 方向等分为
-    ``ceil(height / max_ysize)`` 条，条带内对二值前景求质心；若条带与**不需 split** 的其它矩形
-    AABB 相交，则先去掉落在这些盒子内的像素再求质心。短矩形仍用其几何中心。
-    洋红 ``+`` 标出所有平衡位置（上下栏、brightness 图一致）。
+    ``rect_y_split=True`` 时，对 y 向跨度大于 ``max_ysize`` 的矩形在 y 方向等分为
+    ``ceil(height / max_ysize)`` 条，条带内对前景求质心。若传入 ``labeled``（连通域标号图），
+    则每条条带仅使用该矩形 ``component_labels`` 对应标签的像素，避免 AABB 重叠处混入其它域。
+    未传 ``labeled`` 时行为同旧版（矩形内全部二值前景；并可剔除落在短矩形 AABB 内的像素）。
+    短矩形仍用其几何中心。洋红 ``+`` 标出所有平衡位置（上下栏、brightness 图一致）。
+
+    ``ion_xy`` 非空时直接使用该列表绘制 ``+``（例如 CLI 在 ``ion_equilibrium_positions_xy`` 之后做过近距合并），
+    不再调用 ``ion_equilibrium_positions_xy``。
     """
     im = np.asarray(float_map_pre_binarize, dtype=np.float64)
     bin_im = np.asarray(binary, dtype=bool)
@@ -347,12 +427,20 @@ def visualize_blob_workflow(
         )
     h, w = im.shape
     fig_brightness: Figure | None = None
-    ion_xy: list[tuple[float, float]] = ion_equilibrium_positions_xy(
-        rects,
-        bin_im,
-        split=rect_y_split,
-        max_ysize=float(max_ysize),
-    )
+    if ion_xy is None:
+        ion_xy = ion_equilibrium_positions_xy(
+            rects,
+            bin_im,
+            labeled=labeled,
+            split=rect_y_split,
+            max_ysize=float(max_ysize),
+            refine_x=refine_x,
+            x_profile_threshold=float(x_profile_threshold),
+            x_profile_rel_to_max=x_profile_rel_to_max,
+            intensity=im,
+        )
+    else:
+        ion_xy = list(ion_xy)
 
     if show:
         fig_brightness = _make_blob_brightness_distribution_figure(
@@ -371,7 +459,13 @@ def visualize_blob_workflow(
             n_edge_sliver_merges=n_edge_sliver_merges,
             rect_y_split=rect_y_split,
             max_ysize=max_ysize,
+            refine_x=refine_x,
+            x_profile_threshold=x_profile_threshold,
+            x_profile_rel_to_max=x_profile_rel_to_max,
             ion_xy=ion_xy,
+            labeled=labeled,
+            y_edge_frac=y_edge_frac,
+            merge_band_clip_ellipse=merge_band_clip_ellipse,
         )
 
     lo = float(np.percentile(im, 1))
@@ -394,6 +488,11 @@ def visualize_blob_workflow(
     ]
     if threshold is not None:
         prep_lines.append(f"threshold T: {threshold:g}")
+    if boundary is not None and y_edge_frac is not None:
+        clip_s = "ellipse-clipped" if merge_band_clip_ellipse else "rect strip"
+        prep_lines.append(
+            f"y_edge_frac F={y_edge_frac:g}: gold -- = outer-edge band boundary ({clip_s})",
+        )
     n_ion = len(rects)
     n_merged_boxes = sum(1 for r in rects if getattr(r, "from_edge_merge", False))
     prep_lines.append(f"Ion count (after merge): {n_ion}")
@@ -409,6 +508,15 @@ def visualize_blob_workflow(
         )
     else:
         prep_lines.append("y-split tall rects: off  (use rect centers)")
+    if refine_x:
+        if x_profile_rel_to_max:
+            prep_lines.append(
+                f"x-refine: col_mean > {x_profile_threshold:g} * max(col) (on)",
+            )
+        else:
+            prep_lines.append(
+                f"x-refine (column mean > {x_profile_threshold:g}): on",
+            )
 
     ax0.text(
         0.02,
@@ -436,6 +544,14 @@ def visualize_blob_workflow(
                 alpha=0.9,
                 zorder=5,
             ),
+        )
+    if boundary is not None and y_edge_frac is not None:
+        _add_y_edge_band_split_lines(
+            ax0,
+            boundary,
+            (h, w),
+            y_edge_frac=float(y_edge_frac),
+            merge_band_clip_ellipse=merge_band_clip_ellipse,
         )
     _add_rect_patches(
         ax0,

@@ -7,6 +7,7 @@ from matplotlib.patches import Ellipse
 from matplotlib.widgets import Slider, TextBox, Button, CheckButtons
 
 from ion_detection import detect_ions
+from output_paths import DEFAULT_DATA_DIR
 
 
 class NpyGalleryApp:
@@ -269,6 +270,7 @@ class NpyGalleryApp:
 
 def _resolve_data_dir(project_root: Path) -> Path:
     candidates = [
+        DEFAULT_DATA_DIR.resolve(),
         project_root / "20260305_1727",
         project_root / "data" / "20260305_1727",
     ]

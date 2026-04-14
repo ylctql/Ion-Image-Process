@@ -22,7 +22,7 @@ from output_paths import (
     OUT_PIXEL_HIST,
 )
 
-from ion_detect.blob_ion_positions import ion_equilibrium_positions_xy
+from ion_detect.blob_ion_positions import ion_equilibrium_positions_xy, merge_close_ion_positions_xy
 from ion_detect.blob_viz import visualize_blob_workflow
 from ion_detect.blob_workflow import run_blob_workflow
 from ion_detect.cli_helpers import resolve_indices
@@ -105,7 +105,7 @@ def _write_merge_split_hist(counts: list[int], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(10, 5), constrained_layout=True)
     ax.hist(counts, bins="auto", color="steelblue", edgecolor="white", linewidth=0.5)
-    ax.set_xlabel("Final ion count (after y-split positions)")
+    ax.set_xlabel("Final ion count (after y-split / x-refine / ion-dist merge)")
     ax.set_ylabel("Number of frames")
     ax.set_title(
         f"Distribution of final ion counts (n = {len(counts)} frames)",
@@ -199,6 +199,33 @@ def main() -> None:
         help="与 --split 配合：y 向边长阈值（默认 9）；仅当跨度更大时才分割",
     )
     parser.add_argument(
+        "--refine-x",
+        action="store_true",
+        help="在每个 y 子带（含未 y 细分的单带）内：按列对 y 求二值前景均值，"
+        "大于 --x-profile-threshold 的 x 列连成段，每段内用去噪浮点图正部加权求质心；"
+        "多段对应多个离子。建议与 --split 同用。",
+    )
+    parser.add_argument(
+        "--x-profile-threshold",
+        type=float,
+        default=0.5,
+        metavar="P",
+        help="x 向列阈值 P：默认与条带内 y 向二值占有率 (0–1) 比较；若加 --x-profile-rel-to-max 则与 P*max(col) 比较",
+    )
+    parser.add_argument(
+        "--x-profile-rel-to-max",
+        action="store_true",
+        help="列掩膜改为 col_mean > P * max(col_mean)，适合离子 y 向很薄、绝对占有率难超过 P 时",
+    )
+    parser.add_argument(
+        "--ion-dist",
+        type=float,
+        default=5.0,
+        metavar="D",
+        help="识别位置（含 x 细化）全部求出后：若两位置欧氏距离 < D 像素则合并（最近邻对优先）；"
+        "合并点为去噪图正部加权质心；D≤0 关闭（默认 5）",
+    )
+    parser.add_argument(
         "--log",
         action="store_true",
         help="Append ion-count summary (TSV) to outputs/blob/merge_split.log",
@@ -241,7 +268,8 @@ def main() -> None:
         if write_header:
             log_f.write(
                 "frame_idx\tfile\tinitial_ions\tafter_drop_merge\tafter_y_split\t"
-                "threshold\tsplit_on\tmax_ysize\telapsed_s\tlabels\tpre_merge_dropped\tedge_merges\n",
+                "threshold\tsplit_on\tmax_ysize\trefine_x\tx_profile_threshold\tx_profile_rel_to_max\t"
+                "elapsed_s\tlabels\tpre_merge_dropped\tedge_merges\tion_dist\tn_ion_dist_merge\n",
             )
         print(f"Logging to {log_path.resolve()}")
 
@@ -274,19 +302,32 @@ def main() -> None:
             elapsed = time.perf_counter() - t0
             n_initial = res.n_rects_after_labeling
             n_after_drop_merge = len(res.rects)
-            n_final_ions = len(
-                ion_equilibrium_positions_xy(
-                    res.rects,
-                    res.binary,
-                    split=args.split,
-                    max_ysize=float(args.max_ysize),
-                ),
+            eq_xy = ion_equilibrium_positions_xy(
+                res.rects,
+                res.binary,
+                labeled=res.labeled,
+                split=args.split,
+                max_ysize=float(args.max_ysize),
+                refine_x=args.refine_x,
+                x_profile_threshold=float(args.x_profile_threshold),
+                x_profile_rel_to_max=args.x_profile_rel_to_max,
+                intensity=res.preprocess.denoised_map,
             )
+            if float(args.ion_dist) > 0.0:
+                final_xy, n_ion_dist_merge = merge_close_ion_positions_xy(
+                    eq_xy,
+                    float(args.ion_dist),
+                    intensity=res.preprocess.denoised_map,
+                )
+            else:
+                final_xy, n_ion_dist_merge = eq_xy, 0
+            n_final_ions = len(final_xy)
             print(
                 f"  labels={res.n_components}, kept_rects={n_after_drop_merge}, "
                 f"final_ions={n_final_ions}, "
                 f"pre_merge_dropped={res.n_rects_dropped_pre_merge}, "
                 f"edge_sliver_merges={res.n_edge_sliver_merges}, "
+                f"ion_dist_merges={n_ion_dist_merge}, "
                 f"boundary={'OK' if res.preprocess.boundary else 'None'}, {elapsed:.2f}s",
             )
 
@@ -294,8 +335,10 @@ def main() -> None:
                 log_f.write(
                     f"{idx:04d}\t{target.name}\t{n_initial}\t{n_after_drop_merge}\t{n_final_ions}\t"
                     f"{args.threshold:g}\t{1 if args.split else 0}\t{float(args.max_ysize):g}\t"
+                    f"{1 if args.refine_x else 0}\t{float(args.x_profile_threshold):g}\t"
+                    f"{1 if args.x_profile_rel_to_max else 0}\t"
                     f"{elapsed:.4f}\t{res.n_components}\t{res.n_rects_dropped_pre_merge}\t"
-                    f"{res.n_edge_sliver_merges}\n",
+                    f"{res.n_edge_sliver_merges}\t{float(args.ion_dist):g}\t{n_ion_dist_merge}\n",
                 )
                 log_f.flush()
 
@@ -334,6 +377,13 @@ def main() -> None:
                 n_edge_sliver_merges=res.n_edge_sliver_merges,
                 rect_y_split=args.split,
                 max_ysize=float(args.max_ysize),
+                refine_x=args.refine_x,
+                x_profile_threshold=float(args.x_profile_threshold),
+                x_profile_rel_to_max=args.x_profile_rel_to_max,
+                labeled=res.labeled,
+                y_edge_frac=float(args.y_edge_frac),
+                merge_band_clip_ellipse=not args.no_merge_band_clip_ellipse,
+                ion_xy=final_xy,
             )
     finally:
         if log_f is not None:
