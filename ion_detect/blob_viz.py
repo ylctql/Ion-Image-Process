@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -399,6 +400,9 @@ def visualize_blob_workflow(
     y_edge_frac: float | None = 0.3,
     merge_band_clip_ellipse: bool = True,
     ion_xy: list[tuple[float, float]] | None = None,
+    thr_norm: Literal["none", "p95", "p95_all"] = "none",
+    thr_norm_percentile: float | None = None,
+    thr_norm_scale: float | None = None,
 ) -> None:
     """
     上：二值化前的浮点图（与 ``run_blob_workflow`` 阈值所用阵列一致）+ 可选 boundary + 矩形；
@@ -479,15 +483,57 @@ def visualize_blob_workflow(
     ax0, ax1 = axes[0], axes[1]
 
     im0 = ax0.imshow(im, cmap="gray", aspect="equal", vmin=lo, vmax=hi)
-    fig.colorbar(im0, ax=ax0, fraction=0.035, pad=0.02, label="brightness (linear)")
+    cbar_label = (
+        "z / P(ROI signed) scale (threshold map)"
+        if thr_norm == "p95_all"
+        else (
+            "z / P(+) scale (threshold map)"
+            if thr_norm == "p95"
+            else "brightness (linear)"
+        )
+    )
+    fig.colorbar(im0, ax=ax0, fraction=0.035, pad=0.02, label=cbar_label)
     prep_lines = [
         f"bgsub: {'on' if use_bgsub else 'off'}",
         f"matched filter: {'on' if use_matched_filter else 'off'}",
         f"display vmin/vmax: {lo:.5g} / {hi:.5g}  (1–99.5 pct)",
         f"data min / max: {dmin:.5g} / {dmax:.5g}",
     ]
+    if thr_norm == "p95":
+        ptxt = (
+            f"{thr_norm_percentile:g}"
+            if thr_norm_percentile is not None
+            else "?"
+        )
+        stxt = (
+            f"{thr_norm_scale:g}"
+            if thr_norm_scale is not None
+            else "?"
+        )
+        prep_lines.append(
+            f"thr norm: P({ptxt})(+) in ellipse ROI; scale = {stxt}",
+        )
+    elif thr_norm == "p95_all":
+        ptxt = (
+            f"{thr_norm_percentile:g}"
+            if thr_norm_percentile is not None
+            else "?"
+        )
+        stxt = (
+            f"{thr_norm_scale:g}"
+            if thr_norm_scale is not None
+            else "?"
+        )
+        prep_lines.append(
+            f"thr norm: P({ptxt})(signed all finite in ellipse ROI); scale = {stxt}",
+        )
     if threshold is not None:
-        prep_lines.append(f"threshold T: {threshold:g}")
+        tnote = (
+            " (on normalized z)"
+            if thr_norm in ("p95", "p95_all")
+            else ""
+        )
+        prep_lines.append(f"threshold T: {threshold:g}{tnote}")
     if boundary is not None and y_edge_frac is not None:
         clip_s = "ellipse-clipped" if merge_band_clip_ellipse else "rect strip"
         prep_lines.append(
@@ -571,8 +617,17 @@ def visualize_blob_workflow(
     ax0.set_ylim(h - 0.5, -0.5)
     ax0.set_xlabel("x (pixel)")
     ax0.set_ylabel("y (pixel)")
+    top_title = (
+        "float map (P(signed ROI)-normalized for T) + boundary + rects"
+        if thr_norm == "p95_all"
+        else (
+            "float map (P(+) ROI-normalized for T) + boundary + rects"
+            if thr_norm == "p95"
+            else "float map (intensity) + boundary + rects"
+        )
+    )
     ax0.set_title(
-        f"float map (intensity) + boundary + rects  |  ions={n_ion}  |  eq. (+)={len(ion_xy)}",
+        f"{top_title}  |  ions={n_ion}  |  eq. (+)={len(ion_xy)}",
     )
 
     ax1.imshow(bin_im.astype(np.float64), cmap="gray", aspect="equal", vmin=0.0, vmax=1.0)
@@ -611,8 +666,9 @@ def visualize_blob_workflow(
     ax1.set_xlabel("x (pixel)")
     ax1.set_ylabel("y (pixel)")
     thr_s = f"{threshold:g}" if threshold is not None else "?"
+    bin_note = "norm " if thr_norm in ("p95", "p95_all") else ""
     ax1.set_title(
-        f"binary (T={thr_s}) + boundary + rects  |  ions={n_ion}  |  eq. (+)={len(ion_xy)}",
+        f"binary ({bin_note}T={thr_s}) + boundary + rects  |  ions={n_ion}  |  eq. (+)={len(ion_xy)}",
     )
 
     fig.suptitle(title.strip(), fontsize=12)

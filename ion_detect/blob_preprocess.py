@@ -71,6 +71,115 @@ def preprocess_for_blob_analysis(
     )
 
 
+def ellipse_interior_mask(
+    shape: tuple[int, int],
+    boundary: tuple[float, float, float, float],
+    *,
+    eps: float = 1e-12,
+) -> np.ndarray:
+    """
+    与 ``blob_cli`` / ``blob_viz`` 椭圆 patch 一致：``(cx, cy, a, b)`` 为半轴，返回 (H, W) bool，True 为椭圆内。
+    """
+    h, w = int(shape[0]), int(shape[1])
+    cx, cy, a, b = boundary
+    yy, xx = np.indices((h, w), dtype=np.float64)
+    aa = max(float(a), eps)
+    bb = max(float(b), eps)
+    t = ((xx - cx) / aa) ** 2 + ((yy - cy) / bb) ** 2
+    return np.less_equal(t, 1.0 + eps)
+
+
+def _thr_norm_scale_positive_percentile(
+    z: np.ndarray,
+    mask: np.ndarray,
+    *,
+    percentile: float,
+    eps: float,
+) -> float:
+    """在 ``mask`` 内用正值子集的 ``percentile`` 作尺度；无正值时用 ``|z|`` 分位数，避免减背景后尺度为负。"""
+    vals = z[mask]
+    vals = vals[np.isfinite(vals)]
+    if vals.size == 0:
+        return 1.0
+    pct = float(np.clip(percentile, 1.0, 100.0))
+    pos = vals[vals > 0]
+    if pos.size > 0:
+        s = float(np.percentile(pos, pct))
+    else:
+        s = float(np.percentile(np.abs(vals), pct))
+    if not np.isfinite(s) or s <= eps:
+        s = max(float(np.nanmax(np.abs(vals))), eps)
+    return s
+
+
+def _thr_norm_scale_roi_signed_percentile(
+    z: np.ndarray,
+    mask: np.ndarray,
+    *,
+    percentile: float,
+    eps: float,
+) -> float:
+    """
+    在 ``mask`` 内 **全体有限像素** 的 **有符号** 取值上取 ``percentile``（从最小到最大排序后的分位点），
+    **不是** ``|z|``。用于除法的 ``scale`` 必须为正；若该分位落在非正侧则回退为正值子集分位，再回退 ``|z|``。
+    """
+    vals = z[mask]
+    vals = vals[np.isfinite(vals)]
+    if vals.size == 0:
+        return 1.0
+    pct = float(np.clip(percentile, 1.0, 100.0))
+    s = float(np.percentile(vals, pct))
+    if not np.isfinite(s) or s <= eps:
+        pos = vals[vals > 0]
+        if pos.size > 0:
+            s = float(np.percentile(pos, pct))
+        else:
+            s = float(np.percentile(np.abs(vals), pct))
+        if not np.isfinite(s) or s <= eps:
+            s = max(float(np.nanmax(np.abs(vals))), eps)
+    return s
+
+
+def denoised_map_thr_norm_p95(
+    denoised_map: np.ndarray,
+    boundary: tuple[float, float, float, float] | None,
+    *,
+    percentile: float = 95.0,
+    eps: float = 1e-12,
+) -> tuple[np.ndarray, float]:
+    """
+    每帧统一阈值用：在晶体椭圆内（无 boundary 时用全图有限像素）取正值鲁棒分位作尺度，
+    ``z_norm = z / scale``。``--threshold`` 作用在 ``z_norm`` 上（例如 0.8 表示约原图 0.8×P95(+)）。
+    """
+    z = np.asarray(denoised_map, dtype=np.float64)
+    if boundary is not None:
+        m = ellipse_interior_mask(z.shape, boundary)
+    else:
+        m = np.isfinite(z)
+    scale = _thr_norm_scale_positive_percentile(z, m, percentile=percentile, eps=eps)
+    return (z / scale), float(scale)
+
+
+def denoised_map_thr_norm_p95_all(
+    denoised_map: np.ndarray,
+    boundary: tuple[float, float, float, float] | None,
+    *,
+    percentile: float = 95.0,
+    eps: float = 1e-12,
+) -> tuple[np.ndarray, float]:
+    """
+    与 :func:`denoised_map_thr_norm_p95` 相同的几何掩膜，但尺度取 **ROI 内全体有限像素的有符号** ``P`` 分位
+    （非绝对值）。``z_norm = z / scale``；建议 ``percentile`` 足够高（如 95）使分位落在正尾，否则将触发回退逻辑。
+    """
+    z = np.asarray(denoised_map, dtype=np.float64)
+    if boundary is not None:
+        m = ellipse_interior_mask(z.shape, boundary)
+    else:
+        m = np.isfinite(z)
+    scale = _thr_norm_scale_roi_signed_percentile(z, m, percentile=percentile, eps=eps)
+    return (z / scale), float(scale)
+
+
 def map_for_binarize(
     pre: BlobPreprocessResult,
     *,

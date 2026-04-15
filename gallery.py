@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 import time
 
@@ -284,8 +285,21 @@ def _resolve_data_dir(project_root: Path) -> Path:
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Browse .npy frames and run ion detection.")
+    parser.add_argument(
+        "--data",
+        type=Path,
+        default=None,
+        help="Directory containing .npy files. If omitted, uses DEFAULT_DATA_DIR / 20260305_1727 candidates.",
+    )
+    args = parser.parse_args()
     project_root = Path(__file__).resolve().parent
-    data_dir = _resolve_data_dir(project_root)
+    if args.data is not None:
+        data_dir = args.data.expanduser().resolve()
+        if not data_dir.is_dir():
+            raise NotADirectoryError(f"Not a directory: {data_dir}")
+    else:
+        data_dir = _resolve_data_dir(project_root)
     app = NpyGalleryApp(data_dir, project_root=project_root)
     app.run()
 

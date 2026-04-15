@@ -40,7 +40,9 @@ pip install numpy scipy matplotlib
 | `outputs/ion_detect_imgs/` | `python -m ion_detect` 默认椭圆叠加 PNG |
 | `outputs/bgsub_imgs/` | 减高斯背景（`--save-bgsub-img`） |
 | `outputs/bgsub_binarize_imgs/` | bgsub 与二值 mask（`--bgsub-binarize-threshold`） |
-| `outputs/blob_connected/` | `python -m ion_detect.blob_cli` |
+| `outputs/blob_connected/` | `python -m ion_detect.blob_cli` 双栏 PNG |
+| `outputs/blob/` | `blob_cli` 的 `--log`（`merge_split.log`）、`--hist`（`hist_merge_split.png`） |
+| `outputs/pixel_hist/` | `blob_cli` 的 `--plot-pixel-hist` |
 | `outputs/IonPos/` | 离子中心 `N×2`（`--save-pos`） |
 | `outputs/amp_y_fit/` | y 向振幅拟合系数 |
 | `outputs/stretch_analysis/` | `stretching_analysis.py` |
@@ -109,26 +111,45 @@ python -m ion_detect 0:20 --save-pos
 
 ### 3.2 阈值二值化 + 连通域 + 轴对齐矩形（blob）
 
-**流程**：减背景（可选匹配滤波）→ 浮点图 **固定阈值** → `label` 连通域 → 每域轴对齐最小外接矩形。无单峰高斯拟合。
+**流程**：减背景（默认开，可用 `--no-bgsub` 关）→ 可选匹配滤波 → 浮点图二值化（默认 **`--thr-norm p95`**：椭圆 ROI 内正值子集的 P 分位为 `scale`，阈值 `T` 作用在 **`z/scale`** 上；可用 `--thr-norm none` 改为在 denoised 图上直接用 `T`）→ `label` 连通域 → 轴对齐最小外接矩形 → 可选外缘小矩形合并 → **默认**对矩形做 **y 向 split**（`--max-ysize`）与 **x 向 refine** 得到多离子位置，再按 **`--ion-dist`** 合并近邻。无单峰高斯拟合。
 
-**实现**：`ion_detect/binarize.py`、`blob_preprocess.py`、`blob_components.py`、`blob_workflow.py`、`blob_viz.py`。
+**实现**：`ion_detect/binarize.py`、`blob_preprocess.py`、`blob_components.py`、`blob_workflow.py`、`blob_viz.py`、`blob_ion_positions.py`。
 
 ```bash
-python -m ion_detect.blob_cli 0 --threshold 50
+# 与下列显式参数等价：--split --refine-x --x-profile-threshold 0.4 --y-edge-frac 0.35
+#   --thr-norm p95 --thr-norm-pct 1 --threshold 40
+python -m ion_detect.blob_cli 0
 python -m ion_detect.blob_cli "::5" --threshold 30 --matched-filter
+python -m ion_detect.blob_cli 0 --no-split --no-refine-x --thr-norm none --threshold 50
 ```
 
-| 选项 | 说明 |
-|------|------|
-| `--threshold T` | **必填**；在「可选 bgsub → 可选匹配滤波」后的浮点图上二值化（前景恒为 **≥T**） |
-| `--no-bgsub` | 不减高斯背景 |
-| `--matched-filter` | 与 `detect_ions` 相同匹配滤波 |
-| `--connectivity` | `4` 或 `8`，默认 `4` |
-| `--min-area-pixels N` | 忽略更小连通域 |
-| `--show` | 弹窗：先打开与 `viz` 附录类似的**空域 brightness 分布图**（`RdBu_r`/横向色标，叠 boundary 与矩形），再显示双栏 workflow |
-| `--data-dir` | 数据目录 |
+| 选项 | 默认 | 说明 |
+|------|------|------|
+| `--threshold T` | `40` | 二值化阈值；`--thr-norm` 为 `p95` / `p95_all` 时作用在 **`z/scale`**（前景仍为 **≥T** 的比较语义，见工作流实现） |
+| `--thr-norm` | `p95` | `none`：在 denoised 图上直接用 `T`；`p95`：椭圆 ROI 内**仅正值**的 P 分位作 `scale`；`p95_all`：ROI 内**全体有限像素的有符号** P 分位作 `scale`（不是对绝对值取分位） |
+| `--thr-norm-pct P` | `1` | 与 `p95` / `p95_all` 配合，分位数 **P∈[1,100]** |
+| `--split` / `--no-split` | **开** | y 向条带分割后求平衡位置；`--no-split` 仅用矩形中心 |
+| `--max-ysize Y` | `9` | 与 split 配合：仅当矩形 y 跨度更大时才细分 |
+| `--refine-x` / `--no-refine-x` | **开** | 子带内按列剖面细化 x、可多离子；`--no-refine-x` 关闭 |
+| `--x-profile-threshold P` | `0.4` | x 列掩膜阈值（与条带内 y 向二值占有率比较；`--x-profile-rel-to-max` 时改为相对 `max(col)`） |
+| `--x-profile-rel-to-max` | 关 | 列掩膜 `col_mean > P * max(col_mean)` |
+| `--y-edge-frac` | `0.35` | 外缘条带参数 F（小矩形合并等，与 `outer_y_edge_strip_masks` 一致） |
+| `--ion-dist D` | `5` | 全部位置求出后，欧氏距离 `< D` 合并；**≤0** 关闭 |
+| `--no-merge-small-rects` | 关 | 关闭椭圆 y 外缘带内薄小矩形与 AABB 合并 |
+| `--min-edge-ysize` | `5` | 参与上述合并的矩形 y 向边长上限条件 |
+| `--no-merge-band-clip-ellipse` | 关 | 条带掩膜不按椭圆裁剪 |
+| `--no-pre-merge-drop` | 关 | merge 前不剔除两轴跨度均 ≤1 的矩形 |
+| `--log` | 关 | 追加 TSV 至 `outputs/blob/merge_split.log` |
+| `--hist` | 关 | 各帧最终离子数直方图 → `outputs/blob/hist_merge_split.png` |
+| `--plot-pixel-hist` | 关 | 椭圆内亮度直方图（标 `T`）→ `outputs/pixel_hist/` |
+| `--no-bgsub` | 关 | 不减高斯背景 |
+| `--matched-filter` | 关 | 与 `detect_ions` 相同匹配滤波 |
+| `--connectivity` | `4` | `4` 或 `8` |
+| `--min-area-pixels N` | `1` | 忽略更小连通域 |
+| `--show` | 关 | 弹窗：先打开与 `viz` 附录类似的**空域 brightness 分布图**（`RdBu_r`/横向色标，叠 boundary 与矩形），再显示双栏 workflow |
+| `--data-dir` | `DEFAULT_DATA_DIR` | 数据目录 |
 
-输出：`outputs/blob_connected/` 双栏 PNG：**上**为实际参与阈值的浮点图（线性 brightness 色标，文框标明 bgsub / matched filter 是否开启及显示范围），**下**为二值图与矩形；**估计得到 boundary 时，上下栏均绘制**晶格椭圆（cyan 虚线）。**区别**：`python -m ion_detect` 的 `--bgsub-binarize-threshold` 只导出 bgsub 与 mask PNG，**不**跑连通域与矩形。
+输出：`outputs/blob_connected/` 双栏 PNG：**上**为实际参与阈值的浮点图（线性 brightness 色标，文框标明 bgsub / matched filter 是否开启及显示范围），**下**为二值图与矩形；**估计得到 boundary 时，上下栏均绘制**晶格椭圆（cyan 虚线）。图上洋红等标记为 **split / refine / `ion-dist` 之后**的最终离子位置（默认启用 split 与 refine）。**区别**：`python -m ion_detect` 的 `--bgsub-binarize-threshold` 只导出 bgsub 与 mask PNG，**不**跑连通域与矩形。
 
 ---
 
@@ -359,6 +380,7 @@ python .\project_info.py
 - **形变分析**：增大 `-n`，对比 `quadratic` / `quartic` / `gaussian`。
 - **合并中心**：略减 `--peak-dist` 可补外缘峰；`--ion-dist` 过大易误并；`--edge-x-range` 覆盖可靠列、避开圆角误判。
 - **第二层**：`merge` 与 `second_layer_ion_peaks` 的 `hist-prominence` 默认不同（5 vs 10），对比时统一；勿混淆「单次 merge 多帧直方图」与「batch 每帧独立」。
+- **Blob（`blob_cli`）**：默认已启用 `p95` 阈值尺度（`--thr-norm-pct` 默认 `1`）、`--threshold 40`、`--split` / `--refine-x` 与较大的 `--y-edge-frac`（`0.35`）。若需接近早期「仅连通域矩形、原始浮点阈值」行为，可试 `--no-split --no-refine-x --thr-norm none` 并显式设 `--threshold`。
 
 ---
 

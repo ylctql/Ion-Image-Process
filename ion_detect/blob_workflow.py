@@ -14,7 +14,12 @@ from .blob_components import (
     rects_from_labeled,
 )
 from .blob_edge_rect_merge import merge_edge_band_sliver_rects
-from .blob_preprocess import BlobPreprocessResult, preprocess_for_blob_analysis
+from .blob_preprocess import (
+    BlobPreprocessResult,
+    denoised_map_thr_norm_p95,
+    denoised_map_thr_norm_p95_all,
+    preprocess_for_blob_analysis,
+)
 
 
 @dataclass(frozen=True)
@@ -29,6 +34,11 @@ class BlobWorkflowResult:
     n_rects_dropped_pre_merge: int = 0
     # 连通域 → rects_from_labeled 之后、pre-merge drop / edge merge 之前
     n_rects_after_labeling: int = 0
+    # 二值化实际使用的浮点图；未做 thr归一化时为 None，调用方用 preprocess.denoised_map
+    binarize_float_map: np.ndarray | None = None
+    thr_norm: Literal["none", "p95", "p95_all"] = "none"
+    thr_norm_percentile: float | None = None
+    thr_norm_scale: float | None = None
 
 
 def run_blob_workflow(
@@ -46,10 +56,14 @@ def run_blob_workflow(
     min_edge_ysize: float = 5.0,
     merge_band_clip_ellipse: bool = True,
     pre_merge_drop_max_span: float | None = 1.0,
+    thr_norm: Literal["none", "p95", "p95_all"] = "none",
+    thr_norm_percentile: float = 95.0,
 ) -> BlobWorkflowResult:
     """
-    可选减高斯背景 → 可选匹配滤波得 ``denoised_map`` → 估计 boundary → 在 ``denoised_map`` 上阈值二值化
-    → 连通域 → 每域轴对齐最小外接矩形。
+    可选减高斯背景 → 可选匹配滤波得 ``denoised_map`` → 估计 boundary → 在 ``denoised_map``（或
+    ``thr_norm='p95'`` 时在椭圆 ROI 内 **正值** ``P`` 分位尺度归一化后的图；
+    ``thr_norm='p95_all'`` 时在 ROI 内 **全体有限像素的有符号** ``P`` 分位尺度归一化（非 ``|z|``）。
+    其后均为阈值二值化 → 连通域 → 每域轴对齐最小外接矩形。
 
     在条带 merge 之前，默认剔除 ``width`` 与 ``height`` 均 ≤ ``pre_merge_drop_max_span`` 的矩形
     （两向跨度都不超过 1 像素格意义下的外接盒，见 :func:`~ion_detect.blob_components.drop_rects_both_axis_spans_at_most`）。
@@ -57,6 +71,8 @@ def run_blob_workflow(
 
     ``use_matched_filter=True`` 时与 ``detect_ions`` 使用相同的匹配滤波核；否则 ``denoised_map`` 与
     ``signal``（减背景后或原图浮点）相同。
+
+    ``thr_norm`` 为 ``p95`` / ``p95_all`` 时 ``threshold`` 作用在归一化图上；质心等仍应使用 ``preprocess.denoised_map`` 作强度。
     """
     pre = preprocess_for_blob_analysis(
         image,
@@ -65,7 +81,32 @@ def run_blob_workflow(
         use_matched_filter=use_matched_filter,
     )
     src = np.asarray(pre.denoised_map, dtype=np.float64)
-    binary = binarize_foreground(src, threshold, ge=ge)
+    bin_map: np.ndarray | None = None
+    scale: float | None = None
+    pct: float | None = None
+    norm_mode: Literal["none", "p95", "p95_all"] = "none"
+    if thr_norm == "p95":
+        map_thr, scale = denoised_map_thr_norm_p95(
+            src,
+            pre.boundary,
+            percentile=float(thr_norm_percentile),
+        )
+        bin_map = map_thr
+        pct = float(thr_norm_percentile)
+        norm_mode = "p95"
+        binary = binarize_foreground(map_thr, threshold, ge=ge)
+    elif thr_norm == "p95_all":
+        map_thr, scale = denoised_map_thr_norm_p95_all(
+            src,
+            pre.boundary,
+            percentile=float(thr_norm_percentile),
+        )
+        bin_map = map_thr
+        pct = float(thr_norm_percentile)
+        norm_mode = "p95_all"
+        binary = binarize_foreground(map_thr, threshold, ge=ge)
+    else:
+        binary = binarize_foreground(src, threshold, ge=ge)
     labeled, n = label_connected_components(binary, connectivity=connectivity)
     rects = rects_from_labeled(labeled, min_area_pixels=min_area_pixels)
     n_rects_after_labeling = len(rects)
@@ -99,4 +140,8 @@ def run_blob_workflow(
         n_edge_sliver_merges=n_edge,
         n_rects_dropped_pre_merge=n_drop_pre,
         n_rects_after_labeling=n_rects_after_labeling,
+        binarize_float_map=bin_map,
+        thr_norm=norm_mode,
+        thr_norm_percentile=pct,
+        thr_norm_scale=scale,
     )
