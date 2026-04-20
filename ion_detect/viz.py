@@ -7,10 +7,29 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Ellipse
 
 from .binarize import bgsub_binarize
+from .blob_viz import _add_ion_equilibrium_markers
 
 
 # 与像素坐标一致：x/y 单位同为像素，作图时保持正方形像素（勿用 auto 拉扁椭圆）
 _VIS_ASPECT = "equal"
+
+
+def _add_lattice_boundary(ax, boundary) -> None:
+    if boundary is None:
+        return
+    bcx, bcy, ba, bb = boundary
+    bnd_ell = Ellipse(
+        xy=(bcx, bcy),
+        width=2 * ba,
+        height=2 * bb,
+        angle=0,
+        edgecolor="cyan",
+        facecolor="none",
+        linewidth=1.2,
+        linestyle="--",
+        alpha=0.9,
+    )
+    ax.add_patch(bnd_ell)
 
 
 def _major_axis_near_flags_along_x(ions, boundary, tol):
@@ -364,6 +383,160 @@ def visualize_bgsub_binarized(
     _overlays(ax1)
     ax1.set_title(
         f"{title}   [binary bgsub {rule} {threshold:g}  |  fg {n_fg} px ({frac:.2f}%)]",
+        fontsize=12,
+    )
+    ax1.set_xlabel("x (pixel)")
+    ax1.set_ylabel("y (pixel)")
+    if path_mask is not None:
+        fig1.savefig(path_mask, dpi=200, bbox_inches="tight")
+        print(f"[Saved bgsub binary mask] {path_mask}")
+    if show:
+        plt.show()
+    plt.close(fig1)
+
+
+def visualize_ion_positions_markers(
+    image,
+    positions_xy: list[tuple[float, float]],
+    *,
+    boundary=None,
+    title: str = "",
+    output_path=None,
+    show: bool = False,
+):
+    """灰度原图 + 晶格边界（若有）+ 洋红 ``+`` 离子位置，与 ``blob_viz._add_ion_equilibrium_markers`` 一致。"""
+    fig, ax = plt.subplots(1, 1, figsize=(14, 8), constrained_layout=True)
+    im = np.asarray(image, dtype=np.float64)
+    vmin_i = float(np.percentile(im, 1))
+    vmax_i = float(np.percentile(im, 99.5))
+    ax.imshow(im, cmap="gray", aspect=_VIS_ASPECT, vmin=vmin_i, vmax=vmax_i)
+    _add_lattice_boundary(ax, boundary)
+    _add_ion_equilibrium_markers(ax, list(positions_xy))
+    ax.set_title(
+        f"{title}   [ion positions (magenta +), n={len(positions_xy)}]",
+        fontsize=13,
+    )
+    ax.set_xlabel("x (pixel)")
+    ax.set_ylabel("y (pixel)")
+    fig.tight_layout()
+    if output_path:
+        fig.savefig(output_path, dpi=200)
+        print(f"[Saved] {output_path}")
+    if show:
+        plt.show()
+    plt.close(fig)
+
+
+def visualize_bgsub_markers(
+    bgsub,
+    positions_xy: list[tuple[float, float]],
+    *,
+    boundary=None,
+    title: str = "",
+    output_path=None,
+    show: bool = False,
+):
+    """bgsub 图 + 边界 + 洋红 ``+``，无椭圆。"""
+    fig, ax = plt.subplots(1, 1, figsize=(14, 8))
+    z = np.asarray(bgsub, dtype=np.float64)
+    ap = float(np.percentile(np.abs(z), 99.5))
+    if not np.isfinite(ap) or ap < 1e-18:
+        ap = max(float(np.nanmax(np.abs(z))) if z.size else 0.0, 1e-12)
+    im = ax.imshow(z, cmap="RdBu_r", aspect=_VIS_ASPECT, vmin=-ap, vmax=ap)
+    plt.colorbar(
+        im,
+        ax=ax,
+        orientation="horizontal",
+        fraction=0.046,
+        pad=0.12,
+        label="raw − Gaussian bg",
+    )
+    _add_lattice_boundary(ax, boundary)
+    _add_ion_equilibrium_markers(ax, list(positions_xy))
+    ax.set_title(
+        f"{title}   [bgsub; ion positions (+), n={len(positions_xy)}; |·| 99.5% ≈ {ap:.3g}]",
+        fontsize=12,
+    )
+    ax.set_xlabel("x (pixel)")
+    ax.set_ylabel("y (pixel)")
+    fig.tight_layout()
+    if output_path:
+        fig.savefig(output_path, dpi=200)
+        print(f"[Saved bgsub] {output_path}")
+    if show:
+        plt.show()
+    plt.close(fig)
+
+
+def visualize_bgsub_binarized_markers(
+    bgsub,
+    threshold: float,
+    positions_xy: list[tuple[float, float]],
+    title: str = "",
+    output_path=None,
+    boundary=None,
+    show: bool = False,
+    *,
+    ge: bool = True,
+):
+    """与 :func:`visualize_bgsub_binarized` 相同的两张输出，叠加改为洋红 ``+`` 位置。"""
+    z = np.asarray(bgsub, dtype=np.float64)
+    mask = bgsub_binarize(z, threshold, ge=ge)
+    n_fg = int(np.count_nonzero(mask))
+    n_pix = int(mask.size)
+    frac = (100.0 * n_fg / n_pix) if n_pix else 0.0
+    rule = "≥" if ge else ">"
+    ap = float(np.percentile(np.abs(z), 99.5))
+    if not np.isfinite(ap) or ap < 1e-18:
+        ap = max(float(np.nanmax(np.abs(z))) if z.size else 0.0, 1e-12)
+
+    def _overlays(ax):
+        _add_lattice_boundary(ax, boundary)
+        _add_ion_equilibrium_markers(ax, list(positions_xy))
+
+    path_bgsub = path_mask = None
+    if output_path is not None:
+        base = Path(output_path)
+        path_bgsub = base.with_name(f"{base.stem}_bgsub{base.suffix}")
+        path_mask = base.with_name(f"{base.stem}_mask{base.suffix}")
+
+    fig0, ax0 = plt.subplots(1, 1, figsize=(14, 8), constrained_layout=True)
+    im0 = ax0.imshow(z, cmap="RdBu_r", aspect=_VIS_ASPECT, vmin=-ap, vmax=ap)
+    plt.colorbar(
+        im0,
+        ax=ax0,
+        orientation="horizontal",
+        fraction=0.046,
+        pad=0.12,
+        label="raw − Gaussian bg",
+    )
+    _overlays(ax0)
+    ax0.set_title(
+        f"{title}   [bgsub; binarize {rule} {threshold:g}; + markers n={len(positions_xy)}]",
+        fontsize=12,
+    )
+    ax0.set_xlabel("x (pixel)")
+    ax0.set_ylabel("y (pixel)")
+    if path_bgsub is not None:
+        fig0.savefig(path_bgsub, dpi=200, bbox_inches="tight")
+        print(f"[Saved bgsub (binarize context)] {path_bgsub}")
+    if show:
+        plt.show()
+    plt.close(fig0)
+
+    fig1, ax1 = plt.subplots(1, 1, figsize=(14, 8), constrained_layout=True)
+    im1 = ax1.imshow(mask.astype(np.float64), cmap="gray", aspect=_VIS_ASPECT, vmin=0.0, vmax=1.0)
+    plt.colorbar(
+        im1,
+        ax=ax1,
+        orientation="horizontal",
+        fraction=0.046,
+        pad=0.12,
+        label="foreground=1",
+    )
+    _overlays(ax1)
+    ax1.set_title(
+        f"{title}   [binary bgsub {rule} {threshold:g}  |  fg {n_fg} px ({frac:.2f}%)  |  + n={len(positions_xy)}]",
         fontsize=12,
     )
     ax1.set_xlabel("x (pixel)")

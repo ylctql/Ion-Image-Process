@@ -26,24 +26,26 @@
 pip install numpy scipy matplotlib
 ```
 
+读 **JPEG** 等栅格图时，需 **Pillow**（一般随 matplotlib 依赖安装；若缺则 `pip install pillow`）。
+
 ---
 
 ## 2. 数据与目录约定
 
-- **输入**：默认 `20260305_1727/*.npy`，每个文件一帧（3D 由各脚本自行解释）。
-- **路径约定**：根目录 [`output_paths.py`](output_paths.py) 集中定义 `DEFAULT_DATA_DIR` 与各 `OUT_*`；命令行**不提供**修改输出根目录的选项。
+- **输入**：默认 `20260305_1727/`（见 `DEFAULT_DATA_DIR`）。**`python -m ion_detect`** 支持该目录下的 **`.npy`** 与常见 **栅格图**（`.jpg`/`.jpeg`/`.png`/`.tif`/…，见 `ion_detect.frame_io`）；其它脚本多数仍仅扫 `.npy`。
+- **路径约定**：根目录 [`output_paths.py`](output_paths.py) 集中定义 `DEFAULT_DATA_DIR` 与各 `OUT_*`。多数输出目录固定；**例外**：`python -m ion_detect --save-pos --pos-out-dir DIR` 可将离子坐标写入自定义目录。
 
 **`outputs/` 下常用子目录**
 
 | 子目录 | 用途 |
 |--------|------|
-| `outputs/ion_detect_imgs/` | `python -m ion_detect` 默认椭圆叠加 PNG |
+| `outputs/ion_detect_imgs/` | `python -m ion_detect` 主结果：`ion_positions_*.png`（灰度图 + 晶格边界 + **洋红 `+`**，与合并后坐标一致） |
 | `outputs/bgsub_imgs/` | 减高斯背景（`--save-bgsub-img`） |
 | `outputs/bgsub_binarize_imgs/` | bgsub 与二值 mask（`--bgsub-binarize-threshold`） |
 | `outputs/blob_connected/` | `python -m ion_detect.blob_cli` 双栏 PNG |
 | `outputs/blob/` | `blob_cli` 的 `--log`（`merge_split.log`）、`--hist`（`hist_merge_split.png`） |
 | `outputs/pixel_hist/` | `blob_cli` 的 `--plot-pixel-hist` |
-| `outputs/IonPos/` | 离子中心 `N×2`（`--save-pos`） |
+| `outputs/IonPos/` | 离子中心 `N×2`（`--save-pos`）；可用 `--pos-out-dir` 改目录，文件名为**源帧去扩展名** + `.npy` |
 | `outputs/amp_y_fit/` | y 向振幅拟合系数 |
 | `outputs/stretch_analysis/` | `stretching_analysis.py` |
 | `outputs/histogram/` | `dist.py`、`plot_batch_log_ion_histogram.py`、`hist_*.py` 等 |
@@ -61,23 +63,30 @@ pip install numpy scipy matplotlib
 
 | 方法 | 典型入口 | 要点 |
 |------|----------|------|
-| 高斯拟合 | `python -m ion_detect`、`detect_ions` | 每峰 2D 高斯 + 椭圆；主流程 |
+| 高斯拟合 | `python -m ion_detect`、`detect_ions` | 每峰 2D 高斯拟合 → **ion-dist 合并** → 主图仅 **洋红 `+`** 与边界；`--save-pos` 存合并后坐标 |
 | Blob | `python -m ion_detect.blob_cli` | 阈值二值化 → 连通域 → 轴对齐矩形 |
 | 条带 + 合并 | `merge_ion_centers.py` | 外缘条带辅助峰/COM 与 detect 按规则合并 |
 | 第二层 / slab | `merge --second-layer-slab`、`second_layer_ion_peaks.py`、批量脚本 | y 直方图选行 + x 剖面 + COM |
 
 ### 3.1 高斯拟合单离子检测（`detect_ions`）
 
-**流程**：减背景 → 匹配滤波 → 局部极大与相对阈值 → 2D 高斯拟合（可选 `refine`）。默认 **θ=0 轴对齐**（`fix_theta_zero=True`，仅代码可改）。
+**流程**：减背景 → 匹配滤波 → 局部极大与相对阈值 → 2D 高斯拟合（可选 `refine`）。默认 **θ=0 轴对齐**（`fix_theta_zero=True`）。CLI 可对 `detect_ions` 主要参数调参（见下表「detect_ions」分组）。
+
+**后处理与出图**：对拟合得到的中心做 **`--ion-dist`** 近距合并（欧氏距离 **&lt; D** 的两点合并为**中点**，贪心取全局最近对；`D≤0` 关闭），与 **`blob_cli`** 中平衡位置标记一致，主图仅保留 **灰度原图 + 晶格边界（cyan 虚线椭圆）+ 洋红 `+`**（`visualize_ion_positions_markers`），不再叠加拟合椭圆。
 
 **入口**：推荐 `python -m ion_detect`；等价 `python .\ion_detection.py`。
 
 **代码**
 
 ```python
-from ion_detect import detect_ions, visualize, print_summary
-from ion_detect import visualize_bgsub, visualize_bgsub_binarized, bgsub_binarize
+from ion_detect import detect_ions, print_summary
+from ion_detect import (
+    visualize_ion_positions_markers,
+    visualize_bgsub_markers,
+    visualize_bgsub_binarized_markers,
+)
 # 兼容：from ion_detection import detect_ions, ...
+# 椭圆叠加旧接口仍见 ion_detect.viz.visualize（模块内保留）
 ```
 
 **命令行**
@@ -85,27 +94,43 @@ from ion_detect import visualize_bgsub, visualize_bgsub_binarized, bgsub_binariz
 ```bash
 python -m ion_detect
 python -m ion_detect 0 5 -1 "::3,0:10"
+python -m ion_detect --data-dir D:/data/20260305_1727 --file frame001.jpg
+python -m ion_detect --file D:/pics/a.npy   # 含路径则直接用该文件
 ```
 
 | 选项 | 默认值 | 说明 |
 |------|--------|------|
-| 位置参数 `indices` | `0` | numpy 风格切片并集 |
-| `--save-pos` | 关 | 写入 `outputs/IonPos/` |
-| `--save-bgsub-img` | 关 | `outputs/bgsub_imgs/` |
-| `--bgsub-binarize-threshold T` | 未设置 | `outputs/bgsub_binarize_imgs/`（仅可视化导出，非 blob） |
-| `--bgsub-binarize-strict` | 关 | 前景 `>` 而非 `>=` |
+| 位置参数 `indices` | `0` | 数据目录内**排序后**帧的 numpy 风格切片并集；与 `--file` 同用时**忽略** |
+| `--data-dir DIR` | `DEFAULT_DATA_DIR` | 帧目录（`.npy` + 栅格图） |
+| `--file NAME` | 无 | 可重复；**仅文件名/stem** 时在 `--data-dir` 下解析；**含路径**时直接用该路径。**优先于** `indices` |
+| `--save-pos` | 关 | 保存**合并后**最终中心（与图中 `+` 一致）为 `N×2` 的 `.npy` |
+| `--pos-out-dir DIR` | 无（即用 `OUT_ION_POS`） | **须与 `--save-pos` 合用**；坐标目录；文件名为**源帧 stem** + `.npy` |
+| `--ion-dist D` | `4` | 合并阈值（像素）；`≤0` 不合并 |
+| `--save-bgsub-img` | 关 | `outputs/bgsub_imgs/`，叠 **洋红 `+`**（合并后位置） |
+| `--bgsub-binarize-threshold T` | 未设置 | `outputs/bgsub_binarize_imgs/` 下 `*_bgsub.png` / `*_mask.png`（仅导出，非 blob） |
+| `--bgsub-binarize-strict` | 关 | 前景 **&gt;** 而非 `≥` |
 | `--show` | 关 | 弹窗 |
 
-**`detect_ions` 默认**（见 `ion_detect/pipeline.py`，CLI 未暴露）：`rel_threshold=0.025`，`bg_sigma=(10, 30)`，`peak_size=(5, 9)`，`fit_hw=(3, 4)`，`sigma_range=(0.3, 3.5)`，`refine=True`，`fix_theta_zero=True`。首轮 bgsub：`return_bgsub=True`。
+**`detect_ions` 参数（CLI 分组，默认与 `pipeline.detect_ions` 一致）**
+
+| 选项 | 默认 | 说明 |
+|------|------|------|
+| `--bg-sigma-y` / `--bg-sigma-x` | `10` / `30` | 高斯背景 `sigma`（y, x） |
+| `--peak-size-y` / `--peak-size-x` | `5` / `9` | `detect_map` 上局部极大窗口 |
+| `--rel-threshold` | `0.025` | 相对 `detect_map` 最大值的峰阈值 |
+| `--fit-hw-y` / `--fit-hw-x` | `3` / `4` | 高斯拟合半窗口 |
+| `--sigma-min` / `--sigma-max` | `0.3` / `3.5` | 允许的高斯 σ 范围 |
+| `--no-refine` | （默认开精修） | 关闭两阶段精修 |
+| `--no-fix-theta-zero` | （默认 θ=0） | 允许拟合旋转椭圆 |
 
 **保存中心**
 
 ```bash
 python -m ion_detect "::5" --save-pos
-python -m ion_detect 0:20 --save-pos
+python -m ion_detect 0:20 --save-pos --pos-out-dir D:/exports/ion_pos
 ```
 
-每帧 `N×2` 的 `[x0, y0]`。交互调参见 [5.2 节](#52-gallerypy)。
+每帧 `N×2` 的 `[x0, y0]`，与主图洋红标记一致。交互调参见 [5.2 节](#52-gallerypy)。
 
 ---
 
@@ -118,9 +143,9 @@ python -m ion_detect 0:20 --save-pos
 ```bash
 # 与下列显式参数等价：--split --refine-x --x-profile-threshold 0.4 --y-edge-frac 0.35
 #   --thr-norm p95 --thr-norm-pct 1 --threshold 40
-python -m ion_detect.blob_cli 0
-python -m ion_detect.blob_cli "::5" --threshold 30 --matched-filter
-python -m ion_detect.blob_cli 0 --no-split --no-refine-x --thr-norm none --threshold 50
+python -m ion_detect.blob_cli --indices 0
+python -m ion_detect.blob_cli --threshold 30 --matched-filter --indices "::5"
+python -m ion_detect.blob_cli --no-split --no-refine-x --thr-norm none --threshold 50 --indices 0
 ```
 
 | 选项 | 默认 | 说明 |
@@ -350,8 +375,9 @@ python .\project_info.py
 | `ion_detect.edge_strip` | 外缘条带按列聚合 |
 | `ion_detect.edge_strip_profile_analysis` | 条带列剖面分析 |
 | `ion_detect.edge_strip_profile_viz` | 条带总览与交互 |
-| `ion_detect.viz` | `visualize`、`print_summary`、bgsub/二值可视化 |
-| `ion_detect.cli_helpers` | 索引解析 |
+| `ion_detect.viz` | `print_summary`；主结果 `visualize_ion_positions_markers`；可选 `visualize_bgsub_markers`、`visualize_bgsub_binarized_markers`；另含椭圆版 `visualize` / `visualize_bgsub*`（供脚本或旧流程） |
+| `ion_detect.frame_io` | 数据目录下列举 `.npy`/栅格帧、`load_frame` |
+| `ion_detect.cli_helpers` | 索引解析、`--file` 与 `--data-dir` 联合解析 |
 | `ion_detect.binarize` | `bgsub_binarize` / `bgsub_binarize_u8` |
 | `ion_detect.blob_*` | 预处理、二值、连通域、工作流、可视化 |
 | `ion_detect/__main__.py` | `python -m ion_detect` |
@@ -374,9 +400,9 @@ python .\project_info.py
 
 ## 8. 调参建议
 
-- **漏检 / 假峰**：`gallery` 调 `rel`，或代码 `detect_ions(..., rel_threshold=...)`；可调 `fit_hw`、`peak_size`（代码）。
-- **噪点多**：提高 `rel_threshold`。
-- **旋转椭圆 PSF**：`detect_ions(..., fix_theta_zero=False)`。
+- **漏检 / 假峰**：`gallery` 调 `rel`，或 `python -m ion_detect --rel-threshold ...` / `detect_ions(..., rel_threshold=...)`；`--peak-size-*`、`--fit-hw-*` 等同理。
+- **噪点多**：提高 `--rel-threshold`（或 `rel_threshold`）。
+- **旋转椭圆 PSF**：`python -m ion_detect --no-fix-theta-zero` 或 `detect_ions(..., fix_theta_zero=False)`。
 - **形变分析**：增大 `-n`，对比 `quadratic` / `quartic` / `gaussian`。
 - **合并中心**：略减 `--peak-dist` 可补外缘峰；`--ion-dist` 过大易误并；`--edge-x-range` 覆盖可靠列、避开圆角误判。
 - **第二层**：`merge` 与 `second_layer_ion_peaks` 的 `hist-prominence` 默认不同（5 vs 10），对比时统一；勿混淆「单次 merge 多帧直方图」与「batch 每帧独立」。

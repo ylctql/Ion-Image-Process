@@ -29,6 +29,15 @@ from ion_detect.blob_workflow import run_blob_workflow
 from ion_detect.cli_helpers import resolve_indices
 
 
+def _format_elapsed_min_sec(seconds: float) -> str:
+    """Human-readable duration: ``xx min yy s`` (minutes integer, seconds with 2 decimals)."""
+    if seconds < 0.0:
+        seconds = 0.0
+    m = int(seconds // 60)
+    s = seconds - 60.0 * float(m)
+    return f"{m} min {s:.2f} s"
+
+
 def _write_pixel_brightness_hist(
     denoised_map: np.ndarray,
     output_path: Path,
@@ -107,7 +116,13 @@ def main() -> None:
         description="run_blob_workflow：可选减背景（默认开）与可选匹配滤波 → 在该浮点图上二值化 → boundary → 连通域 → 轴对齐矩形；"
         "输出上下两幅子图 PNG（上：二值化前浮点图+色标与预处理说明；下：二值+矩形）",
     )
-    parser.add_argument("indices", nargs="*", default=["0"], help="帧索引（与 ion_detect 相同切片语法）")
+    parser.add_argument(
+        "--indices",
+        nargs="*",
+        default=None,
+        metavar="SLICE",
+        help="帧索引（与 ion_detect 相同切片语法）；可写在命令任意位置；省略时默认 0",
+    )
     parser.add_argument(
         "--data-dir",
         type=Path,
@@ -238,6 +253,13 @@ def main() -> None:
         "预处理与 thr_norm 等，便于与当前 CLI 参数一一对应",
     )
     parser.add_argument(
+        "--log-human-elapsed",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="与 --log 配合：在 file 列后写入 elapsed_hms（xx min yy s 格式）并随帧打印该样本识别总耗时；"
+        "用 --no-log-human-elapsed 仅保留数值列 elapsed_s",
+    )
+    parser.add_argument(
         "--hist",
         action="store_true",
         help="Save histogram of final ion counts to outputs/blob/hist_merge_split.png (English labels)",
@@ -255,11 +277,20 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.indices is None:
+        index_slices: list[str] = ["0"]
+    elif not args.indices:
+        raise SystemExit(
+            "--indices 需要至少一个索引或切片片段（不要单独写空的 --indices；省略该选项则默认 0）",
+        )
+    else:
+        index_slices = list(args.indices)
+
     data_dir = args.data_dir
     files = sorted(f for f in data_dir.iterdir() if f.suffix == ".npy")
     if not files:
         raise SystemExit(f"目录 {data_dir} 无 .npy")
-    selected = resolve_indices(args.indices, len(files))
+    selected = resolve_indices(index_slices, len(files))
     if not selected:
         raise SystemExit("索引为空")
 
@@ -273,9 +304,15 @@ def main() -> None:
         write_header = not log_path.exists() or log_path.stat().st_size == 0
         log_f = open(log_path, "a", encoding="utf-8")
         if write_header:
+            mid = (
+                "frame_idx\tfile\telapsed_hms\tinitial_ions\tafter_drop_merge\tafter_equilibrium\t"
+                "final_ions\t"
+                if args.log_human_elapsed
+                else "frame_idx\tfile\tinitial_ions\tafter_drop_merge\tafter_equilibrium\tfinal_ions\t"
+            )
             log_f.write(
-                "frame_idx\tfile\tinitial_ions\tafter_drop_merge\tafter_equilibrium\tfinal_ions\t"
-                "threshold\tbgsub\tmatched_filter\tconnectivity\tmin_area_pixels\t"
+                mid
+                + "threshold\tbgsub\tmatched_filter\tconnectivity\tmin_area_pixels\t"
                 "split_on\tmax_ysize\trefine_x\tx_profile_threshold\tx_profile_rel_to_max\t"
                 "elapsed_s\tlabels\tpre_merge_dropped\tedge_merges\tion_dist\tn_ion_dist_merge\t"
                 "thr_norm\tthr_norm_pct\tthr_norm_scale\n",
@@ -294,7 +331,6 @@ def main() -> None:
             image = np.asarray(image, dtype=np.float64)
 
             conn: Literal[4, 8] = 4 if args.connectivity == 4 else 8
-            t0 = time.perf_counter()
             thr_norm_kw: Literal["none", "p95", "p95_all"]
             if args.thr_norm == "p95_all":
                 thr_norm_kw = "p95_all"
@@ -302,6 +338,7 @@ def main() -> None:
                 thr_norm_kw = "p95"
             else:
                 thr_norm_kw = "none"
+            t0 = time.perf_counter()
             res = run_blob_workflow(
                 image,
                 args.threshold,
@@ -317,7 +354,6 @@ def main() -> None:
                 thr_norm=thr_norm_kw,
                 thr_norm_percentile=float(args.thr_norm_pct),
             )
-            elapsed = time.perf_counter() - t0
             n_initial = res.n_rects_after_labeling
             n_after_drop_merge = len(res.rects)
             eq_xy = ion_equilibrium_positions_xy(
@@ -339,15 +375,18 @@ def main() -> None:
                 )
             else:
                 final_xy, n_ion_dist_merge = eq_xy, 0
+            elapsed = time.perf_counter() - t0
             n_final_ions = len(final_xy)
             n_after_equilibrium = len(eq_xy)
+            elapsed_hms = _format_elapsed_min_sec(elapsed)
             print(
                 f"  labels={res.n_components}, kept_rects={n_after_drop_merge}, "
                 f"after_equilibrium={n_after_equilibrium}, final_ions={n_final_ions}, "
                 f"pre_merge_dropped={res.n_rects_dropped_pre_merge}, "
                 f"edge_sliver_merges={res.n_edge_sliver_merges}, "
                 f"ion_dist_merges={n_ion_dist_merge}, "
-                f"boundary={'OK' if res.preprocess.boundary else 'None'}, {elapsed:.2f}s",
+                f"boundary={'OK' if res.preprocess.boundary else 'None'}, "
+                f"识别耗时 {elapsed_hms} ({elapsed:.2f}s)",
             )
 
             if log_f is not None:
@@ -361,8 +400,10 @@ def main() -> None:
                     if res.thr_norm_percentile is not None
                     else ""
                 )
+                hms_cell = f"{elapsed_hms}\t" if args.log_human_elapsed else ""
                 log_f.write(
-                    f"{idx:04d}\t{target.name}\t{n_initial}\t{n_after_drop_merge}\t"
+                    f"{idx:04d}\t{target.name}\t{hms_cell}"
+                    f"{n_initial}\t{n_after_drop_merge}\t"
                     f"{n_after_equilibrium}\t{n_final_ions}\t"
                     f"{args.threshold:g}\t{0 if args.no_bgsub else 1}\t"
                     f"{1 if args.matched_filter else 0}\t{int(args.connectivity)}\t"

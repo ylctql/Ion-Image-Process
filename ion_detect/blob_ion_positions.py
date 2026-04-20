@@ -378,12 +378,16 @@ def merge_close_ion_positions_xy(
     ion_dist: float,
     *,
     intensity: np.ndarray | None = None,
+    pairwise_midpoint: bool = False,
 ) -> tuple[list[tuple[float, float]], int]:
     """
     在完成条带 / x 向细化等步骤得到的 ``(x, y)`` 列表上，按「距离从小到大」贪心合并过近点：
 
     反复在**当前**点集中选取欧氏距离**最小**的一对；若该距离严格小于 ``ion_dist``，则合并为加权质心
     （``intensity`` 非空时权重为最近像素 ``max(0, value)``，否则等权），并重复直至不存在这样的对。
+
+    ``pairwise_midpoint=True`` 时：每次合并后对**新点**的权重固定为 1，使后续合并始终是「当前两点」的
+    中点（与 ``intensity`` 互斥场景下与等权两两中点一致）；默认 ``False`` 保持旧行为（权重累加）。
 
     ``ion_dist <= 0`` 时不合并。合并次数作为第二项返回。
     """
@@ -426,7 +430,10 @@ def merge_close_ion_positions_xy(
             pts.pop(idx)
             wts.pop(idx)
         pts.append(new_p)
-        wts.append(new_w)
+        if pairwise_midpoint:
+            wts.append(1.0)
+        else:
+            wts.append(new_w)
         n_merges += 1
 
     return [(float(p[0]), float(p[1])) for p in pts], n_merges
